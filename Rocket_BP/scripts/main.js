@@ -11,30 +11,32 @@
  *  Модули файла (порядок совпадает с порядком в коде):
  *   §0  Конфигурация
  *   §1  Утилиты: векторы, углы, безопасные вызовы, JSON-хранилища
- *   §2  Каталог дронов: полёт, звук, взрыв, крепление на пусковой установке (ПУ)
- *   §3  Хранилища: шаблоны целей (мир), отмеченные точки, маршруты, архив (игрок)
+ *   §2  Каталог дронов: полёт, звук, взрыв, положение на направляющей ПУ
+ *   §3  Хранилища: шаблоны целей (мир), план маршрута, архив, вид карты (игрок)
  *   §4  Менеджер зон тиков (tickingarea): создание, следование, удаление, очистка
  *   §5  Эффекты: частицы, дым, вспышка, взрыв, звук двигателей
  *   §6  Коллизии с блоками (AABB, общий модуль для дронов и обломков)
- *   §7  Реестр дронов и полётный контроллер (наведение, коллизии, подрыв)
- *   §8  Модуль пуска: одиночный пуск и залп, строй, задержки, дроны на ПУ
- *   §9  UI-планшет (server-ui): пуск, активные дроны, шаблоны, архив, служебное
- *   §10 Ввод игрока: пульты, клик по дрону, установка дрона на ПУ
+ *   §7  Реестр дронов и полётный контроллер (путевые точки, пикирование, подрыв)
+ *   §8  Пусковые установки: 1 ПУ = 1 дрон, батарея, пуск очередью с направляющих
+ *   §9  UI-планшет: пуск, редактор маршрута, тактическая карта, активные дроны
+ *   §10 Ввод игрока: зарядка ПУ, пульты, клики по ПУ и дронам
  *   §11 Физика обломков (debris)
  *   §12 Палуба и твёрдые части моделей (игрок может стоять на дроне)
  *   §13 Инициализация: очистка зон тиков после перезагрузки, запуск циклов
  *
  *  Как пользоваться (коротко):
- *   • «Пульт цели» / «Пульт архива маршрутов» — это планшет.
- *     ПКМ в воздух открывает меню. ПКМ по блоку отмечает блок как цель
- *     и открывает форму пуска. С Shift+ПКМ по блоку точка только отмечается.
- *   • «Пульт маршрута»: ПКМ по блоку добавляет промежуточную точку
- *     (на CONFIG.WAYPOINT_ALT блоков выше блока). Маршрут завершается
- *     отметкой цели планшетом.
- *   • Клик по дрону на ПУ: с планшетом в руке открывает форму пуска этого дрона,
- *     без планшета запускает дрон по последнему маршруту с пульта.
- *   • Служебные команды: /scriptevent bpla:areas (статус зон тиков),
- *     /scriptevent bpla:cleanup (удалить зоны дронов, которые больше не летят).
+ *   1. Поставьте пусковые установки (ПУ) и зарядите каждую: нажмите по ПУ
+ *      предметом дрона. Одна ПУ вмещает один дрон.
+ *   2. «Пульт цели» / «Пульт архива маршрутов» — это планшет. ПКМ в воздух
+ *      открывает меню. В «Маршрут и цель» на тактической карте ставятся
+ *      конечная цель и путевые точки. ПКМ планшетом по блоку сразу делает
+ *      его целью (с Shift — без открытия меню).
+ *   3. «Пуск»: планшет находит готовые ПУ рядом (батарею). Ползунок 1..N
+ *      выбирает число дронов, они стартуют со своих ПУ по очереди.
+ *   4. «Пульт маршрута»: ПКМ по блоку добавляет путевую точку
+ *      (на CONFIG.WAYPOINT_ALT блоков выше блока).
+ *   5. Служебные команды: /scriptevent bpla:areas (статус зон тиков),
+ *      /scriptevent bpla:cleanup (удалить зоны дронов, которые больше не летят).
  * ============================================================================
  */
 
@@ -47,28 +49,29 @@ import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft
 // Все игровые константы собраны здесь, чтобы их можно было настроить
 // без правки логики.
 const CONFIG = {
-  // --- Пуск ---------------------------------------------------------------
-  MAX_SWARM: 8, // максимум дронов в одном залпе (слайдер 1..MAX_SWARM)
-  FORMATION_SPACING: 4.5, // расстояние между дронами в строю, блоков
-  LAUNCH_FORWARD: 4, // точка старта: на столько блоков впереди игрока...
-  LAUNCH_HEIGHT: 3, // ...и на столько блоков выше его ног
-  LAUNCHER_SEARCH_RADIUS: 48, // радиус поиска дронов на ПУ вокруг игрока
-  CONSUME_ITEMS_IN_SURVIVAL: true, // в выживании запуск «из планшета» тратит предметы дронов
-  DEFAULT_CRUISE_ALT: 30, // высота марша над целью/стартом по умолчанию
-  WAYPOINT_ALT: 30, // высота точек пульта маршрута над блоком (как в оригинале)
-  MAX_WAYPOINTS: 8, // максимум промежуточных точек пульта маршрута
-  MAX_RANGE: 4000, // максимальная горизонтальная дальность до цели
+  // --- Пусковые установки и пуск ------------------------------------------
+  BATTERY_RADIUS: 96, // радиус, в котором планшет ищет ПУ игрока (батарею)
+  SALVO_INTERVAL: 18, // тиков между пусками в очереди залпа (ТЗ: 15–20)
+  CONSUME_IN_CREATIVE: false, // списывать предмет дрона при зарядке ПУ и в творческом режиме
+  DEFAULT_ECHELON: 120, // высота эшелона (абсолютный Y) по умолчанию
+  ECHELON_MIN: 80, // пределы ползунка «Высота эшелона»
+  ECHELON_MAX: 220,
+  WAYPOINT_ALT: 30, // «Пульт маршрута»: высота точки над блоком (как в оригинале)
+  MAX_WAYPOINTS: 8, // максимум путевых точек в маршруте
+  MAX_RANGE: 4000, // максимальная горизонтальная дальность цели от игрока
   ROUTE_SCATTER: 5, // разброс удара при повторе маршрута из архива, блоков
 
   // --- Полёт --------------------------------------------------------------
   SPEED_MULT: 1.0, // общий множитель скорости всех дронов
-  ARRIVE_RADIUS: 2.5, // подрыв при сближении с целью ближе этого расстояния
+  ARRIVE_RADIUS: 1.5, // подрыв при сближении с целью ближе этого расстояния
+  WAYPOINT_RADIUS: 4, // радиус захвата путевой точки (ТЗ: 3–5 блоков)
+  TERRAIN_RESOLVE_RANGE: 48, // на этой дистанции высота цели «по рельефу» уточняется заново
   CRUISE_MAX_PITCH: 25, // предельный тангаж на марше, градусов
   ALT_HOLD_BASE: 40, // база удержания высоты на марше: ошибка высоты / база = желаемый наклон
   TERMINAL_RANGE: 26, // с этой горизонтальной дистанции начинается пикирование...
   TERMINAL_BLEND: 12, // ...и за столько блоков доходит до чистого наведения на цель
   LAUNCHER_BLOCK_GRACE: 60, // тиков без проверки блоков после схода с ПУ
-  AIR_LAUNCH_BLOCK_GRACE: 12, // то же для дронов, запущенных «из планшета»
+  FREE_LAUNCH_BLOCK_GRACE: 12, // то же для дрона, стоящего не на ПУ (старые миры)
   ENTITY_COLLISION_GRACE: 30, // тиков без проверки столкновения с существами
   ENTITY_HIT_RADIUS: 1.8, // радиус контактного подрыва о игрока/моба
   RESYNC_DISTANCE: 4, // если дрон сдвинули извне дальше этого — берём его позицию
@@ -83,6 +86,11 @@ const CONFIG = {
   MAX_DRONE_AREAS: 9, // лимит мира — 10 зон; одну оставляем игрокам/другим аддонам
   AREA_HOUSEKEEPING_INTERVAL: 200, // периодическая уборка «осиротевших» зон
 
+  // --- Тактическая карта --------------------------------------------------
+  MAP_ZOOMS: [5, 10, 25, 50, 100, 200], // масштабы: блоков в одной клетке
+  MAP_DEFAULT_ZOOM: 2, // индекс масштаба по умолчанию (25 блоков)
+  MAP_PAN_CELLS: 4, // сдвиг карты кнопками сторон света, клеток
+
   // --- Шаблоны и UI -------------------------------------------------------
   MAX_PRESETS: 40,
   PRESET_NAME_MAX: 32,
@@ -94,6 +102,7 @@ const CONFIG = {
 /** Предметы, которые работают как планшет управления. */
 const TABLET_ITEMS = new Set(["bpla:remote_target", "bpla:remote_orange"]);
 const WAYPOINT_ITEM = "bpla:remote_waypoint";
+const PLAYER_TYPE = "minecraft:player";
 
 // ============================================================================
 // §1  УТИЛИТЫ
@@ -118,15 +127,12 @@ const clamp01 = (v) => clamp(v, 0, 1);
 const lerp = (a, b, t) => a + (b - a) * t;
 /** Приводит угол к диапазону [-180, 180). */
 const wrap180 = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
-/** Приводит угол в радианах к диапазону [-π, π). */
-const wrapPi = (a) => ((((a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI;
 /** Интерполяция угла по кратчайшей дуге. */
 const lerpAngle = (a, b, t) => a + wrap180(b - a) * t;
 const smoothstep = (t) => t * t * (3 - 2 * t);
 
 const vcopy = (p) => ({ x: p.x, y: p.y, z: p.z });
 const vadd = (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
-const vsub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 const vscale = (a, k) => ({ x: a.x * k, y: a.y * k, z: a.z * k });
 const vlen = (a) => Math.hypot(a.x, a.y, a.z);
 const vdist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -136,7 +142,6 @@ const vnorm = (a) => {
   return l > 1e-9 ? { x: a.x / l, y: a.y / l, z: a.z / l } : { x: 0, y: 0, z: 1 };
 };
 const floorPoint = (p) => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
-const blockCenter = (p) => ({ x: Math.floor(p.x) + 0.5, y: Math.floor(p.y) + 0.5, z: Math.floor(p.z) + 0.5 });
 const roundPoint = (p) => ({
   x: Math.round(p.x * 100) / 100,
   y: Math.round(p.y * 100) / 100,
@@ -271,32 +276,6 @@ function parseCoordinate(raw, base) {
   return Number.isFinite(n) ? n : NaN;
 }
 
-/**
- * Разбирает X/Y/Z из формы и проверяет их.
- * Возвращает { ok, point } с центром блока или { ok: false, error }.
- */
-function parseTargetFields(xs, ys, zs, base, dimId) {
-  const x = parseCoordinate(xs, base.x),
-    y = parseCoordinate(ys, base.y),
-    z = parseCoordinate(zs, base.z);
-  if (![x, y, z].every(Number.isFinite)) {
-    return { ok: false, error: "Координаты должны быть числами (можно ~ для относительных)." };
-  }
-  return validateTarget(blockCenter({ x, y, z }), base, dimId);
-}
-
-/** Проверка цели: высота в пределах измерения и дальность. */
-function validateTarget(point, base, dimId) {
-  const [minY, maxY] = dimLimits(dimId);
-  if (point.y < minY || point.y >= maxY) {
-    return { ok: false, error: `Высота Y должна быть в пределах ${minY}..${maxY - 1}.` };
-  }
-  if (hdist(point, base) > CONFIG.MAX_RANGE) {
-    return { ok: false, error: `Цель дальше ${CONFIG.MAX_RANGE} блоков.` };
-  }
-  return { ok: true, point };
-}
-
 /** Дата в виде ДД.ММ ЧЧ:ММ (UTC сервера). Без Intl, которого в QuickJS может не быть. */
 function fmtTime(ms) {
   const d = new Date(ms);
@@ -366,7 +345,6 @@ const DRONE_TYPES = {
     mount: { z: 0.5, y: 0.6, p: 15 },
     power: 8,
     debris: null,
-    freePlacement: true, // ставится без ПУ
   },
   "rocket:missile3": {
     name: "Shahed-136",
@@ -485,9 +463,13 @@ const DP = {
   OWNER: "bpla:owner",
   CALLSIGN: "bpla:callsign",
   GROUP: "bpla:group",
-  CRUISE: "bpla:cruise",
-  TARGET_OFFSET: "bpla:toff",
+  ECHELON: "bpla:echelon",
+  LAUNCHER_ID: "bpla:launcher_id", // ПУ, на направляющей которой стоит (стоял) дрон
 };
+
+/** Предмет дрона → тип сущности (для зарядки ПУ). */
+const ITEM_TO_DRONE = {};
+for (const id of DRONE_TYPE_IDS) ITEM_TO_DRONE[DRONE_TYPES[id].item] = id;
 
 // ============================================================================
 // §3  ХРАНИЛИЩА
@@ -541,81 +523,114 @@ const Presets = {
   },
 };
 
-/** Точка, отмеченная планшетом (ПКМ по блоку). Хранится у игрока. */
-const Captures = {
-  KEY: "bpla:capture",
-  get(player) {
-    const c = readJSON(player, this.KEY, null);
-    return c && isPoint(c) && typeof c.dim === "string" ? c : null;
-  },
-  set(player, point, dimId) {
-    writeJSON(player, this.KEY, { x: Math.floor(point.x), y: Math.floor(point.y), z: Math.floor(point.z), dim: dimId });
-  },
-};
+/**
+ * План маршрута игрока (редактор маршрута и тактическая карта).
+ * Хранится в динамическом свойстве игрока как JSON:
+ *   { dim, echelon, waypoints: [{x, y, z}], target: {x, y, z} | null }
+ * x/z — координаты блока. y у путевой точки — высота эшелона. y цели
+ * равен null, если высота берётся по рельефу (уточняется в полёте).
+ */
+const RoutePlan = {
+  KEY: "bpla:route_plan",
 
-/** Последние настройки формы пуска: форма открывается с ними в следующий раз. */
-const LaunchPrefs = {
-  KEY: "bpla:prefs",
-  get(player) {
-    const d = {
-      type: 0,
-      count: 1,
-      formation: 0,
-      interval: 1,
-      spread: 0,
-      cruise: CONFIG.DEFAULT_CRUISE_ALT,
-      useLaunchers: true,
-    };
-    const saved = readJSON(player, this.KEY, {});
-    return Object.assign(d, saved && typeof saved === "object" ? saved : {});
+  empty(dimId) {
+    return { dim: dimId, echelon: CONFIG.DEFAULT_ECHELON, waypoints: [], target: null };
   },
-  set(player, prefs) {
-    writeJSON(player, this.KEY, prefs);
+
+  get(player) {
+    const dimId = safe(() => player.dimension.id, "minecraft:overworld");
+    const raw = readJSON(player, this.KEY, null);
+    const plan = this.empty(dimId);
+    if (!raw || typeof raw !== "object") return plan;
+    if (typeof raw.dim === "string") plan.dim = raw.dim;
+    if (Number.isFinite(raw.echelon)) plan.echelon = raw.echelon;
+    if (Array.isArray(raw.waypoints)) plan.waypoints = raw.waypoints.filter(isPoint).slice(0, CONFIG.MAX_WAYPOINTS);
+    const t = raw.target;
+    if (t && Number.isFinite(t.x) && Number.isFinite(t.z)) {
+      plan.target = { x: t.x, y: Number.isFinite(t.y) ? t.y : null, z: t.z };
+    }
+    return plan;
+  },
+
+  set(player, plan) {
+    writeJSON(player, this.KEY, plan);
+  },
+
+  /** План для текущего измерения игрока. Если план из другого измерения, он заменяется пустым. */
+  forDimension(player) {
+    const dimId = player.dimension.id;
+    const plan = this.get(player);
+    if (plan.dim === dimId) return plan;
+    const fresh = this.empty(dimId);
+    fresh.echelon = plan.echelon;
+    return fresh;
+  },
+
+  hasPoints(plan) {
+    return plan.waypoints.length > 0 || !!plan.target;
   },
 };
 
 /**
- * Маршруты «пульта маршрута» (логика оригинала).
- *  • PENDING: точки, которые ставятся прямо сейчас. Держатся в памяти до отметки цели.
- *  • last_bpla_route: готовый маршрут. Последняя точка — цель.
- *  • bpla_route_history: архив из CONFIG.MAX_ROUTE_HISTORY последних маршрутов.
+ * Архив маршрутов игрока (последние CONFIG.MAX_ROUTE_HISTORY пусков).
+ * Записи старого формата ({ route: [точки...], time }, последняя точка — цель)
+ * читаются и преобразуются в план.
  */
-const PENDING_WAYPOINTS = new Map(); // playerId -> Vector3[]
-const Routes = {
-  LAST: "last_bpla_route",
-  HISTORY: "bpla_route_history",
+const RouteHistory = {
+  KEY: "bpla_route_history",
 
-  pending(player) {
-    return PENDING_WAYPOINTS.get(player.id) ?? [];
+  all(player) {
+    const h = readJSON(player, this.KEY, []);
+    if (!Array.isArray(h)) return [];
+    const out = [];
+    for (const it of h) {
+      if (it && it.plan && it.plan.target) out.push({ plan: it.plan, time: it.time || 0 });
+      else if (it && Array.isArray(it.route) && it.route.length && it.route.every(isPoint)) {
+        const last = it.route[it.route.length - 1];
+        out.push({
+          plan: {
+            dim: safe(() => player.dimension.id, "minecraft:overworld"),
+            echelon: CONFIG.DEFAULT_ECHELON,
+            waypoints: it.route.slice(0, -1),
+            target: { x: Math.floor(last.x), y: Math.floor(last.y), z: Math.floor(last.z) },
+          },
+          time: it.time || 0,
+        });
+      }
+    }
+    return out;
   },
 
-  last(player) {
-    const r = readJSON(player, this.LAST, null);
-    return Array.isArray(r) && r.length && r.every(isPoint) ? r : null;
-  },
-
-  setLast(player, route) {
-    writeJSON(player, this.LAST, route ?? undefined);
-  },
-
-  /** Промежуточные точки для «пуска по точкам»: сначала текущие, иначе из готового маршрута. */
-  waypointsFor(player) {
-    const pending = this.pending(player);
-    if (pending.length) return pending;
-    const last = this.last(player);
-    return last && last.length > 1 ? last.slice(0, -1) : [];
-  },
-
-  history(player) {
-    const h = readJSON(player, this.HISTORY, []);
-    return Array.isArray(h) ? h.filter((it) => it && Array.isArray(it.route) && it.route.length) : [];
-  },
-
-  pushHistory(player, route) {
-    let h = this.history(player);
-    h.push({ route, time: Date.now() });
+  push(player, plan) {
+    let h = readJSON(player, this.KEY, []);
+    if (!Array.isArray(h)) h = [];
+    h.push({ plan, time: Date.now() });
     if (h.length > CONFIG.MAX_ROUTE_HISTORY) h = h.slice(h.length - CONFIG.MAX_ROUTE_HISTORY);
-    writeJSON(player, this.HISTORY, h);
+    writeJSON(player, this.KEY, h);
+  },
+};
+
+/** Положение и масштаб тактической карты игрока: { x, z, zoom, dim }. Центр карты — курсор. */
+const MapViews = {
+  KEY: "bpla:map_view",
+
+  get(player) {
+    const dimId = player.dimension.id;
+    const v = readJSON(player, this.KEY, null);
+    if (v && v.dim === dimId && Number.isFinite(v.x) && Number.isFinite(v.z)) {
+      return {
+        x: Math.floor(v.x),
+        z: Math.floor(v.z),
+        zoom: clamp(v.zoom | 0, 0, CONFIG.MAP_ZOOMS.length - 1),
+        dim: dimId,
+      };
+    }
+    const p = player.location;
+    return { x: Math.floor(p.x), z: Math.floor(p.z), zoom: CONFIG.MAP_DEFAULT_ZOOM, dim: dimId };
+  },
+
+  set(player, view) {
+    writeJSON(player, this.KEY, { x: Math.floor(view.x), z: Math.floor(view.z), zoom: view.zoom, dim: view.dim });
   },
 };
 
@@ -1272,14 +1287,16 @@ function droneBlockCollision(dim, cfg, next, cur, yaw, pitch) {
 //
 // Цикл полёта (каждый тик, system.runInterval):
 //   1. раскрутка на ПУ (spool): дрон стоит на направляющей;
-//   2. переход к следующей точке маршрута, если текущая пройдена;
+//   2. переход к следующей точке маршрута: дрон вошёл в радиус
+//      CONFIG.WAYPOINT_RADIUS (по горизонтали) или проскочил точку на вираже;
 //   3. вектор на цель: желаемые курс и тангаж;
 //   4. плавный поворот: угловая скорость ограничена радиусом разворота,
 //      тангаж ограничен CONFIG.CRUISE_MAX_PITCH (на пикировании — больше);
 //   5. на финальном участке направление плавно смешивается с прямым
 //      вектором на цель (терминальное наведение гарантирует попадание);
-//   6. проверки: цель ближе CONFIG.ARRIVE_RADIUS → подрыв; блоки и существа
-//      на пути → подрыв;
+//   6. проверки: цель ближе CONFIG.ARRIVE_RADIUS (1,5 блока) → подрыв;
+//      блоки и существа на пути → подрыв. Высота цели «по рельефу»
+//      уточняется, когда до неё остаётся CONFIG.TERRAIN_RESOLVE_RANGE;
 //   7. перемещение: teleport в новую точку (интерполяция координат)
 //      + applyImpulse, чтобы клиент плавно отрисовывал движение между тиками.
 
@@ -1291,12 +1308,11 @@ function droneBlockCollision(dim, cfg, next, cur, yaw, pitch) {
  * @property {typeof DRONE_TYPES[string]} cfg
  * @property {string} dimId
  * @property {boolean} launched   в полёте (или на раскрутке)
- * @property {{x:number,y:number,z:number}[]} route  оставшиеся точки; последняя — цель
+ * @property {{x:number,y:number,z:number,auto?:boolean}[]} route  оставшиеся точки; последняя — цель (auto: высота по рельефу)
  * @property {string} owner       имя игрока, запустившего дрон
  * @property {string} callsign    позывной, например «Ш-136-12»
  * @property {string} group       номер залпа
- * @property {number} cruise      высота марша над целью
- * @property {{x:number,z:number}} toff  смещение точки удара в залпе (сохраняется при коррекции)
+ * @property {number} echelon     высота эшелона (абсолютный Y)
  * @property {{yaw:number,pitch:number,pos:?{x:number,y:number,z:number}}|null} mount  положение на ПУ
  * @property {{x:number,y:number,z:number}} pos  расчётная позиция (источник истины для полёта)
  * @property {number} yaw
@@ -1304,6 +1320,7 @@ function droneBlockCollision(dim, cfg, next, cur, yaw, pitch) {
  * @property {number} yawRate
  * @property {number} spdFactor
  * @property {number} turned      накопленный разворот, градусов (защита от кружения вокруг точки)
+ * @property {number} wpBest      минимальная дистанция до текущей путевой точки
  * @property {number} flightTicks
  * @property {number} spoolTicks
  * @property {number} spoolMax
@@ -1345,7 +1362,6 @@ function registerDrone(entity) {
   const myaw = getDP(entity, DP.MOUNT_YAW),
     mpitch = getDP(entity, DP.MOUNT_PITCH),
     mpos = readJSON(entity, DP.MOUNT_POS, null);
-  const toff = readJSON(entity, DP.TARGET_OFFSET, null);
   /** @type {DroneState} */
   const st = {
     id: entity.id,
@@ -1358,8 +1374,7 @@ function registerDrone(entity) {
     owner: String(getDP(entity, DP.OWNER) ?? ""),
     callsign: String(getDP(entity, DP.CALLSIGN) ?? `${cfg.short}-?`),
     group: String(getDP(entity, DP.GROUP) ?? ""),
-    cruise: Number(getDP(entity, DP.CRUISE)) || CONFIG.DEFAULT_CRUISE_ALT,
-    toff: toff && Number.isFinite(toff.x) && Number.isFinite(toff.z) ? { x: toff.x, z: toff.z } : { x: 0, z: 0 },
+    echelon: Number(getDP(entity, DP.ECHELON)) || CONFIG.DEFAULT_ECHELON,
     mount:
       typeof myaw === "number" && typeof mpitch === "number"
         ? { yaw: myaw, pitch: mpitch, pos: isPoint(mpos) ? mpos : null }
@@ -1370,6 +1385,7 @@ function registerDrone(entity) {
     yawRate: 0,
     spdFactor: 1,
     turned: 0,
+    wpBest: Infinity,
     // Дрон, найденный уже в полёте (после /reload), считается разогнанным.
     flightTicks: launched ? 1000 : 0,
     spoolTicks: 0,
@@ -1411,8 +1427,7 @@ function persistFlight(st) {
   setDP(e, DP.OWNER, st.owner);
   setDP(e, DP.CALLSIGN, st.callsign);
   setDP(e, DP.GROUP, st.group);
-  setDP(e, DP.CRUISE, st.cruise);
-  writeJSON(e, DP.TARGET_OFFSET, st.toff);
+  setDP(e, DP.ECHELON, st.echelon);
   persistRoute(st);
 }
 
@@ -1465,7 +1480,7 @@ function dronePhase(st) {
   if (st.hit) return "§cсбит, падает";
   if (st.spoolTicks < st.spoolMax) return "§eзапуск двигателя на ПУ";
   if (!st.route.length) return "§eзависание, цель не задана";
-  if (st.route.length > 1) return `марш, точка маршрута (осталось ${st.route.length - 1})`;
+  if (st.route.length > 1) return `марш по маршруту (точек до цели: ${st.route.length - 1})`;
   const t = st.route[0];
   return hdist(st.pos, t) < CONFIG.TERMINAL_RANGE ? "§6пикирование на цель" : "полёт к цели";
 }
@@ -1515,19 +1530,30 @@ function idleTick(st) {
   }
 }
 
-/** Радиус, с которого промежуточная точка считается пройденной. Зависит от манёвренности и угла следующего поворота. */
-function passRadius(st, wp, next) {
-  const base = Math.max(4.5, (st.cfg.turnRadius / st.cfg.turn) * 0.55);
-  let rb = base;
-  if (next) {
-    const seg = Math.hypot(next.x - wp.x, next.z - wp.z);
-    rb *= 1 + 0.6 * clamp01((2 * rb - seg) / (2 * rb));
-    const b1 = Math.atan2(wp.z - st.pos.z, wp.x - st.pos.x),
-      b2 = Math.atan2(next.z - wp.z, next.x - wp.x),
-      turnAngle = Math.abs(wrapPi(b2 - b1));
-    rb = Math.max(rb, base * (1 + (1.45 * turnAngle) / Math.PI));
+/**
+ * Путевая точка пройдена, если:
+ *   • дрон вошёл в радиус CONFIG.WAYPOINT_RADIUS по горизонтали (высота может ещё выравниваться);
+ *   • или дрон уже был рядом с точкой (ближе 3 радиусов захвата), но проскочил её на вираже
+ *     и теперь удаляется: разворот ради точного попадания в точку был бы лишним кругом.
+ */
+function waypointReached(st, wp) {
+  const h = hdist(wp, st.pos);
+  if (h < CONFIG.WAYPOINT_RADIUS) return true;
+  if (h < st.wpBest) {
+    st.wpBest = h;
+    return false;
   }
-  return rb;
+  return st.wpBest < CONFIG.WAYPOINT_RADIUS * 3 && h > st.wpBest + 1.5;
+}
+
+/** Высота рельефа (Y поверхности, куда можно встать) в точке или null, если чанк не загружен. */
+function terrainHeight(dimId, x, z) {
+  try {
+    const top = world.getDimension(dimId).getTopmostBlock({ x: Math.floor(x), z: Math.floor(z) });
+    return top ? top.location.y + 1 : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Один тик полёта по маршруту. */
@@ -1564,11 +1590,24 @@ function flightTick(st, now) {
   let routeChanged = false;
   while (st.route.length > 1) {
     const wp = st.route[0];
-    if (hdist(wp, st.pos) < passRadius(st, wp, st.route[1]) || st.turned > 200) {
+    if (waypointReached(st, wp) || st.turned > 200) {
       st.route.shift();
       st.turned = 0;
+      st.wpBest = Infinity;
       routeChanged = true;
     } else break;
+  }
+
+  // Цель «по рельефу»: вблизи чанк цели загружен, берём актуальную высоту поверхности
+  // (в залпе предыдущие дроны могли оставить воронку).
+  const goal = st.route[st.route.length - 1];
+  if (goal.auto && (now + st.phase) % 5 === 0 && hdist(goal, st.pos) < CONFIG.TERRAIN_RESOLVE_RANGE) {
+    const ground = terrainHeight(st.dimId, goal.x, goal.z);
+    if (ground !== null) {
+      goal.y = ground + 0.5;
+      delete goal.auto;
+      routeChanged = true;
+    }
   }
   if (routeChanged) persistRoute(st);
 
@@ -1875,101 +1914,139 @@ function areaHousekeeping() {
 }
 
 // ============================================================================
-// §8  МОДУЛЬ ПУСКА: ОДИНОЧНЫЙ ПУСК И ЗАЛП
+// §8  ПУСКОВЫЕ УСТАНОВКИ (ПУ), БАТАРЕЯ И ПУСК
 // ============================================================================
-// Залп не создаёт дроны в одной точке, иначе они застревают друг в друге.
-//  • Каждый дрон получает слот строя: клин, шеренга или колонна. Слот
-//    задаёт смещение точки старта (шаг CONFIG.FORMATION_SPACING) поперёк
-//    и вдоль курса на цель.
-//  • Пуски разнесены во времени через system.runTimeout
-//    (по умолчанию 1 дрон в секунду).
-//  • Тот же слот задаёт смещение точки удара («разброс»), так что залп
-//    накрывает площадь, а не одну точку.
-//  • Сначала задействуются дроны, уже стоящие на ПУ рядом с игроком.
-//    Недостающие появляются перед игроком; в выживании на каждый такой
-//    дрон тратится предмет из инвентаря.
+// Правило: одна ПУ вмещает ровно один дрон.
+//  • Состояние хранится в динамических свойствах сущности ПУ:
+//      loaded_count  — 0 (пусто) или 1 (заряжена);
+//      loaded_type   — тип дрона на направляющей;
+//      bpla:owner    — игрок, который зарядил ПУ (батарея игрока);
+//      bpla:drone_id — сущность дрона, стоящая на направляющей.
+//  • Зарядка — клик предметом дрона по ПУ (§10). У заряженной ПУ
+//    взаимодействие отменяется, предмет не списывается, в actionbar выводится
+//    «§cНа этой установке уже заряжен дрон!». Пустая ПУ списывает 1 предмет
+//    из руки, ставит дрон на направляющую и подписывается «§aПУ [Заряжена]».
+//  • Батарея — заряженные ПУ игрока в радиусе CONFIG.BATTERY_RADIUS.
+//    При пуске K дронов отбирается ровно K ПУ (ближайшие к игроку). Они
+//    становятся пустыми, остальные остаются заряженными.
+//  • Дрон стартует со своей направляющей: позиция ПУ + подъём, курс ПУ,
+//    угол возвышения направляющей. Пуски идут очередью через
+//    CONFIG.SALVO_INTERVAL тиков (system.runTimeout).
 
-/** Варианты строя (порядок совпадает с выпадающим списком формы). */
-const FORMATIONS = [
-  { id: "wedge", name: "Клин" },
-  { id: "line", name: "Шеренга" },
-  { id: "column", name: "Колонна" },
-];
+const LDP = { LOADED: "loaded_count", TYPE: "loaded_type", OWNER: "bpla:owner", DRONE: "bpla:drone_id" };
+const LAUNCHER_TAG_LOADED = "§aПУ [Заряжена]";
+const LAUNCHER_TAG_EMPTY = "§7ПУ [Пусто]";
+/** ПУ, уже назначенные в идущий залп и ещё не отстрелявшиеся. */
+const LAUNCHERS_BUSY = new Set();
 
-/**
- * Слоты строя в «единицах строя».
- * lat — вправо (+) или влево (−) от курса, back — назад (отрицательные значения).
- */
-function formationSlots(kind, n) {
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const k = Math.ceil(i / 2),
-      side = i % 2 === 1 ? -1 : 1,
-      lat = i === 0 ? 0 : side * k;
-    if (kind === "line") out.push({ lat, back: 0 });
-    else if (kind === "column") out.push({ lat: 0, back: -i });
-    else out.push({ lat, back: -k }); // клин: ведущий впереди, ведомые уступом назад
-  }
-  return out;
-}
-
-/** Горизонтальный единичный курс from → to (запасной вариант — направление взгляда). */
-function horizontalHeading(from, to, fallbackDir) {
-  let dx = to.x - from.x,
-    dz = to.z - from.z;
-  let l = Math.hypot(dx, dz);
-  if (l < 0.5 && fallbackDir) {
-    dx = fallbackDir.x;
-    dz = fallbackDir.z;
-    l = Math.hypot(dx, dz);
-  }
-  return l > 1e-6 ? { x: dx / l, y: 0, z: dz / l } : { x: 0, y: 0, z: 1 };
+function actionbar(player, text) {
+  try {
+    if (isValid(player)) player.onScreenDisplay.setActionBar(text);
+  } catch {}
 }
 
 /**
- * Маршрут до цели.
- *  • Если заданы точки пульта маршрута: они (со смещением слота строя), затем цель.
- *  • Иначе автоматический профиль: набор высоты → марш на высоте cruise →
- *    точка захода примерно на 45° перед целью → пикирование.
- *    climb:false (коррекция в полёте) — без участка набора высоты.
+ * Положение дрона на направляющей ПУ: вынос вперёд по курсу ПУ и подъём по Y
+ * (cfg.mount), курс ПУ, угол возвышения направляющей.
  */
-function buildRoute(start, target, opts) {
-  const dimId = opts.dimId;
-  const [minY, maxY] = dimLimits(dimId);
-  const cruise = clamp(Number(opts.cruise) || CONFIG.DEFAULT_CRUISE_ALT, 0, 200);
-  const fixY = (y) => clamp(y, minY + 2, maxY - 3);
-  const route = [];
+function railPose(launcher, typeId) {
+  const cfg = DRONE_TYPES[typeId] ?? DRONE_TYPES["rocket:missile3"];
+  const ll = launcher.location,
+    yaw = launcher.getRotation().y,
+    rad = yaw * RAD,
+    m = cfg.mount;
+  return { pos: { x: ll.x - Math.sin(rad) * m.z, y: ll.y + m.y, z: ll.z + Math.cos(rad) * m.z }, yaw, pitch: m.p };
+}
 
-  if (opts.waypoints && opts.waypoints.length) {
-    const off = opts.waypointOffset ?? { x: 0, z: 0 };
-    for (const w of opts.waypoints) route.push({ x: w.x + off.x, y: fixY(w.y), z: w.z + off.z });
-    route.push(target);
-    return route.map(roundPoint);
-  }
+/** Дрон, стоящий на направляющей (по связи bpla:drone_id), если он жив и не запущен. */
+function railDroneOf(launcher) {
+  const id = getDP(launcher, LDP.DRONE);
+  if (typeof id !== "string" || !id) return null;
+  const e = safe(() => world.getEntity(id), undefined);
+  return e && isValid(e) && DRONE_TYPES[e.typeId] && !isDroneLaunched(e) ? e : null;
+}
 
-  const dx = target.x - start.x,
-    dz = target.z - start.z,
-    horiz = Math.hypot(dx, dz);
-  if (cruise < 1 || horiz < 1) return [roundPoint(target)];
-  const hx = dx / horiz,
-    hz = dz / horiz;
-  const climbing = opts.climb !== false;
-  const cruiseY = fixY((climbing ? Math.max(start.y, target.y) : target.y) + cruise);
-  const approach = clamp(cruiseY - target.y, 16, 40);
-  const climbDist = climbing ? clamp((cruiseY - start.y) / Math.tan(22 * RAD), 20, 90) : 0;
+/**
+ * Состояние ПУ. ПУ из старых миров (без loaded_count) при первом обращении
+ * получают статус по факту: стоит ли рядом не запущенный дрон.
+ */
+function launcherState(launcher) {
+  let loaded = getDP(launcher, LDP.LOADED);
+  if (loaded === undefined) {
+    const legacy = safe(
+      () =>
+        launcher.dimension
+          .getEntities({ location: launcher.location, maxDistance: 3, families: ["rocket"] })
+          .find((e) => DRONE_TYPES[e.typeId] && !isDroneLaunched(e) && typeof getDP(e, DP.MOUNT_YAW) === "number"),
+      undefined,
+    );
+    if (legacy) {
+      setDP(legacy, DP.LAUNCHER_ID, launcher.id);
+      markLauncherLoaded(launcher, legacy.typeId, "", legacy.id);
+    } else markLauncherEmpty(launcher);
+    loaded = getDP(launcher, LDP.LOADED);
+  }
+  return {
+    loaded: loaded === 1,
+    type: String(getDP(launcher, LDP.TYPE) ?? ""),
+    owner: String(getDP(launcher, LDP.OWNER) ?? ""),
+  };
+}
 
-  if (climbing && climbDist < horiz - approach - 12) {
-    route.push({ x: start.x + hx * climbDist, y: cruiseY, z: start.z + hz * climbDist });
+function markLauncherLoaded(launcher, typeId, owner, droneId) {
+  setDP(launcher, LDP.LOADED, 1);
+  setDP(launcher, LDP.TYPE, typeId);
+  setDP(launcher, LDP.OWNER, owner);
+  setDP(launcher, LDP.DRONE, droneId || undefined);
+  try {
+    launcher.nameTag = LAUNCHER_TAG_LOADED;
+  } catch {}
+}
+
+function markLauncherEmpty(launcher) {
+  setDP(launcher, LDP.LOADED, 0);
+  setDP(launcher, LDP.TYPE, undefined);
+  setDP(launcher, LDP.DRONE, undefined);
+  try {
+    launcher.nameTag = LAUNCHER_TAG_EMPTY;
+  } catch {}
+}
+
+/** Ставит сущность дрона на направляющую ПУ и связывает их. */
+function placeOnRail(launcher, entity, typeId) {
+  const pose = railPose(launcher, typeId);
+  entity.teleport(pose.pos, { rotation: { x: pose.pitch, y: pose.yaw } });
+  setDP(entity, DP.MOUNT_YAW, pose.yaw);
+  setDP(entity, DP.MOUNT_PITCH, pose.pitch);
+  writeJSON(entity, DP.MOUNT_POS, pose.pos);
+  setDP(entity, DP.LAUNCHER_ID, launcher.id);
+  safe(() => entity.triggerEvent("rocket:mount"));
+  const st = registerDrone(entity);
+  if (st) {
+    st.mount = { yaw: pose.yaw, pitch: pose.pitch, pos: pose.pos };
+    st.pos = vcopy(pose.pos);
   }
-  if (horiz > approach + 12) {
-    route.push({ x: target.x - hx * approach, y: cruiseY, z: target.z - hz * approach });
+  return pose;
+}
+
+/** Создаёт дрон прямо на направляющей ПУ (не в воздухе). */
+function spawnOnRail(launcher, typeId) {
+  const pose = railPose(launcher, typeId);
+  let e;
+  try {
+    e = launcher.dimension.spawnEntity(typeId, pose.pos);
+  } catch (err) {
+    logError("spawnOnRail", err);
+    return null;
   }
-  route.push(target);
-  return route.map(roundPoint);
+  // Связь с ПУ ставится сразу: обработчик появления дронов (§10) не должен трогать этот дрон.
+  setDP(e, DP.LAUNCHER_ID, launcher.id);
+  placeOnRail(launcher, e, typeId);
+  return e;
 }
 
 // ---------------------------------------------------------------------------
-// Инвентарь (расход дронов в выживании)
+// Инвентарь
 // ---------------------------------------------------------------------------
 function inventoryOf(player) {
   return safe(() => player.getComponent("minecraft:inventory").container, undefined);
@@ -1980,84 +2057,167 @@ function heldItemId(player) {
   return safe(() => inv.getItem(player.selectedSlotIndex)?.typeId, undefined);
 }
 
-function needsItems(player) {
-  if (!CONFIG.CONSUME_ITEMS_IN_SURVIVAL) return false;
-  const gm = safe(() => player.getGameMode(), GameMode.creative);
-  return gm === GameMode.survival || gm === GameMode.adventure;
+function isCreative(player) {
+  return safe(() => player.getGameMode(), GameMode.survival) === GameMode.creative;
 }
 
-function countItems(player, itemId) {
+/** Списывает 1 предмет itemId из руки. В творческом режиме не списывает (см. CONFIG.CONSUME_IN_CREATIVE). */
+function consumeHeld(player, itemId) {
   const inv = inventoryOf(player);
-  if (!inv) return 0;
-  let n = 0;
-  for (let i = 0; i < inv.size; i++) {
-    const it = safe(() => inv.getItem(i), undefined);
-    if (it && it.typeId === itemId) n += it.amount;
-  }
-  return n;
-}
-
-/** Забирает до n предметов. Возвращает, сколько удалось забрать. */
-function takeItems(player, itemId, n) {
-  const inv = inventoryOf(player);
-  if (!inv || n <= 0) return 0;
-  let left = n;
-  for (let i = 0; i < inv.size && left > 0; i++) {
-    const it = safe(() => inv.getItem(i), undefined);
-    if (!it || it.typeId !== itemId) continue;
-    const take = Math.min(it.amount, left);
-    try {
-      if (take >= it.amount) inv.setItem(i, undefined);
-      else {
-        it.amount -= take;
-        inv.setItem(i, it);
-      }
-      left -= take;
-    } catch {}
-  }
-  return n - left;
-}
-
-/** Возврат предметов (если запуск не удался): в инвентарь, а если он полон — на землю. */
-function giveItems(player, itemId, n) {
-  if (n <= 0 || !isValid(player)) return;
+  if (!inv) return false;
+  const slot = player.selectedSlotIndex;
+  const it = safe(() => inv.getItem(slot), undefined);
+  if (!it || it.typeId !== itemId) return false;
+  if (isCreative(player) && !CONFIG.CONSUME_IN_CREATIVE) return true;
   try {
-    const rest = inventoryOf(player)?.addItem(new ItemStack(itemId, n));
+    if (it.amount <= 1) inv.setItem(slot, undefined);
+    else {
+      it.amount -= 1;
+      inv.setItem(slot, it);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Отдаёт предмет игроку: в инвентарь, а если он полон — на землю. */
+function giveItem(player, itemId) {
+  if (!isValid(player)) return;
+  try {
+    const rest = inventoryOf(player)?.addItem(new ItemStack(itemId, 1));
     if (rest) player.dimension.spawnItem(rest, player.location);
   } catch {}
 }
 
 // ---------------------------------------------------------------------------
-// Поиск дронов на ПУ и точки старта
+// Зарядка и разрядка ПУ
 // ---------------------------------------------------------------------------
-/** Свободные дроны нужного типа на ПУ вокруг точки, ближайшие первыми. */
-function findIdleMountedDrones(dim, origin, typeId, max) {
-  let list = [];
+/** Зарядка ПУ предметом дрона из руки игрока. Возвращает true, если ПУ заряжена. */
+function loadLauncher(player, launcher, itemId) {
+  const typeId = ITEM_TO_DRONE[itemId];
+  if (!typeId || !isValid(player) || !isValid(launcher)) return false;
+  if (launcherState(launcher).loaded || LAUNCHERS_BUSY.has(launcher.id)) {
+    actionbar(player, "§cНа этой установке уже заряжен дрон!");
+    return false;
+  }
+  if (!consumeHeld(player, itemId)) {
+    actionbar(player, "§cВозьмите предмет дрона в руку.");
+    return false;
+  }
+  const drone = spawnOnRail(launcher, typeId);
+  markLauncherLoaded(launcher, typeId, player.name, drone ? drone.id : "");
   try {
-    list = dim.getEntities({ type: typeId, location: origin, maxDistance: CONFIG.LAUNCHER_SEARCH_RADIUS });
+    launcher.runCommand("playsound armor.equip_iron @a ~ ~ ~ 1.0 0.8");
   } catch {}
-  return list
-    .filter(
-      (e) =>
-        isValid(e) &&
-        !RESERVED.has(e.id) &&
-        getDP(e, DP.LAUNCHED) !== true &&
-        typeof getDP(e, DP.MOUNT_YAW) === "number",
-    )
-    .sort((a, b) => vdist(a.location, origin) - vdist(b.location, origin))
-    .slice(0, max);
+  actionbar(player, `§aПУ заряжена: ${DRONE_TYPES[typeId].name}`);
+  return true;
 }
 
-/** Поднимает точку старта вверх, пока она внутри твёрдого блока (не выше чем на 8 блоков). */
-function findFreeSpawnPoint(dim, p) {
-  const [, maxY] = dimLimits(dim.id);
-  const q = vcopy(p);
-  for (let i = 0; i < 8 && q.y < maxY - 2; i++) {
-    const b = safe(() => dim.getBlock(floorPoint(q)), undefined);
-    if (!b || b.isAir || b.isLiquid) return q;
-    q.y += 1;
+/** Разрядка: дрон снимается с направляющей и возвращается игроку предметом. */
+function unloadLauncher(player, launcher) {
+  if (!isValid(launcher)) return false;
+  const s = launcherState(launcher);
+  if (!s.loaded || LAUNCHERS_BUSY.has(launcher.id)) return false;
+  const drone = railDroneOf(launcher);
+  if (drone) {
+    const st = DRONES.get(drone.id);
+    if (st) forgetDrone(st);
+    safe(() => drone.remove());
   }
-  return q;
+  markLauncherEmpty(launcher);
+  if (DRONE_TYPES[s.type]) giveItem(player, DRONE_TYPES[s.type].item);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Батарея игрока
+// ---------------------------------------------------------------------------
+/**
+ * Сканирует ПУ вокруг игрока (радиус CONFIG.BATTERY_RADIUS).
+ * ready — заряженные ПУ этого игрока (или без владельца), ближайшие первыми;
+ * empty — пустые; busy — уже назначенные в идущий залп.
+ */
+function scanBattery(player) {
+  const out = { ready: [], empty: [], busy: 0 };
+  if (!isValid(player)) return out;
+  const origin = player.location;
+  let list = [];
+  try {
+    list = player.dimension.getEntities({
+      type: LAUNCHER_TYPE,
+      location: origin,
+      maxDistance: CONFIG.BATTERY_RADIUS,
+    });
+  } catch {}
+  for (const l of list) {
+    if (!isValid(l)) continue;
+    if (LAUNCHERS_BUSY.has(l.id)) {
+      out.busy++;
+      continue;
+    }
+    const s = launcherState(l);
+    const entry = { launcher: l, id: l.id, type: s.type, dist: vdist(l.location, origin) };
+    if (s.loaded && DRONE_TYPES[s.type]) {
+      if (!s.owner || s.owner === player.name) out.ready.push(entry);
+    } else out.empty.push(entry);
+  }
+  out.ready.sort((a, b) => a.dist - b.dist);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Маршрут полёта
+// ---------------------------------------------------------------------------
+const lerpXZ = (a, b, t, y) => ({ x: a.x + (b.x - a.x) * t, y, z: a.z + (b.z - a.z) * t });
+
+/**
+ * Точка цели для полёта: центр блока. Если высота не задана (y: null), берётся
+ * рельеф (если чанк загружен), а точка помечается auto: в полёте высота
+ * уточнится заново (§7).
+ */
+function resolveTargetPoint(t, dimId, fallbackY) {
+  const x = Math.floor(t.x) + 0.5,
+    z = Math.floor(t.z) + 0.5;
+  if (Number.isFinite(t.y)) return { x, y: Math.floor(t.y) + 0.5, z };
+  const ground = terrainHeight(dimId, x, z);
+  return { x, y: (ground ?? Math.floor(fallbackY)) + 0.5, z, auto: true };
+}
+
+/**
+ * Полётный маршрут от точки старта по плану:
+ *   набор высоты эшелона → путевые точки W1..Wn → точка захода → пикирование на цель.
+ * Точка набора высоты стоит на курсе к первой точке и позволяет дрону сначала
+ * выйти на эшелон. Точка захода находится на высоте последнего участка,
+ * примерно под 45° к цели. climb:false (коррекция в полёте) — без набора высоты.
+ */
+function buildFlightRoute(start, plan, dimId, opts = {}) {
+  const [minY, maxY] = dimLimits(dimId);
+  const fixY = (y) => clamp(y, minY + 2, maxY - 3);
+  const echelon = fixY(Number(plan.echelon) || CONFIG.DEFAULT_ECHELON);
+  const target = resolveTargetPoint(plan.target, dimId, start.y);
+  const wps = (plan.waypoints ?? [])
+    .filter(isPoint)
+    .map((w) => ({ x: Math.floor(w.x) + 0.5, y: fixY(w.y), z: Math.floor(w.z) + 0.5 }));
+  const route = [];
+
+  const first = wps[0] ?? target;
+  const cruiseY = wps.length ? wps[0].y : echelon;
+  if (opts.climb !== false) {
+    const d = hdist(start, first);
+    const climbDist = clamp((cruiseY - start.y) / Math.tan(22 * RAD), 20, 120);
+    if (cruiseY - start.y > 6 && climbDist < d - 10) route.push(lerpXZ(start, first, climbDist / d, cruiseY));
+  }
+  route.push(...wps);
+
+  const lastY = wps.length ? wps[wps.length - 1].y : echelon;
+  const last = route.length ? route[route.length - 1] : { x: start.x, y: lastY, z: start.z };
+  const dist = hdist(last, target);
+  const approach = clamp(lastY - target.y, 16, 60);
+  if (dist > approach + 12) route.push(lerpXZ(target, last, approach / dist, lastY));
+
+  route.push(target);
+  return route.map((p) => (p.auto ? { ...roundPoint(p), auto: true } : roundPoint(p)));
 }
 
 // ---------------------------------------------------------------------------
@@ -2067,7 +2227,7 @@ function findFreeSpawnPoint(dim, p) {
  * Переводит сущность дрона в полёт по маршруту: заполняет состояние, пишет
  * данные в сущность, включает группу компонентов rocket:route_ticking
  * (без гравитации и коллизий), создаёт зону тиков и проигрывает эффекты старта.
- * opts: { route, owner, group, cruise, toff, fromLauncher, yaw, pitch }
+ * opts: { route, owner, group, echelon, fromLauncher }
  */
 function startFlight(entity, opts) {
   if (!isValid(entity)) return null;
@@ -2077,14 +2237,14 @@ function startFlight(entity, opts) {
   st.launched = true;
   st.hit = false;
   st.dead = false;
-  st.route = (opts.route ?? []).filter(isPoint).map(roundPoint);
+  st.route = (opts.route ?? []).filter(isPoint).map((p) => (p.auto ? { ...roundPoint(p), auto: true } : roundPoint(p)));
   st.owner = opts.owner ?? "";
   st.group = opts.group ?? "";
-  st.cruise = Number(opts.cruise) || CONFIG.DEFAULT_CRUISE_ALT;
-  st.toff = opts.toff ? { x: opts.toff.x, z: opts.toff.z } : { x: 0, z: 0 };
+  st.echelon = Number(opts.echelon) || CONFIG.DEFAULT_ECHELON;
   st.callsign = `${cfg.short}-${nextSequence("bpla:callsign_seq")}`;
   st.flightTicks = 0;
   st.turned = 0;
+  st.wpBest = Infinity;
   st.yawRate = 0;
   st.spdFactor = 1;
   st.snd = 0;
@@ -2095,8 +2255,8 @@ function startFlight(entity, opts) {
   st.pos = vcopy(entity.location);
   st.dimId = safe(() => entity.dimension.id, st.dimId);
 
-  const onLauncher = !!opts.fromLauncher && !!st.mount;
-  if (onLauncher) {
+  const onRail = !!opts.fromLauncher && !!st.mount;
+  if (onRail) {
     st.spoolMax = cfg.spool;
     st.spoolTicks = 0;
     st.blockGrace = CONFIG.LAUNCHER_BLOCK_GRACE;
@@ -2107,9 +2267,9 @@ function startFlight(entity, opts) {
     const r = safe(() => entity.getRotation(), { x: 0, y: 0 });
     st.spoolMax = 0;
     st.spoolTicks = 0;
-    st.blockGrace = CONFIG.AIR_LAUNCH_BLOCK_GRACE;
-    st.yaw = opts.yaw ?? r.y;
-    st.pitch = opts.pitch ?? r.x;
+    st.blockGrace = CONFIG.FREE_LAUNCH_BLOCK_GRACE;
+    st.yaw = r.y;
+    st.pitch = r.x;
   }
   st.entityGrace = CONFIG.ENTITY_COLLISION_GRACE;
 
@@ -2117,201 +2277,113 @@ function startFlight(entity, opts) {
   try {
     entity.triggerEvent("rocket:route_start");
   } catch {}
-  if (!onLauncher) {
-    try {
-      entity.teleport(st.pos, { rotation: { x: st.pitch, y: st.yaw } });
-    } catch {}
-  }
 
-  // Зона тиков создаётся сразу при старте (tickingarea add circle X Y Z 2 drone_<id>).
+  // Зона тиков создаётся сразу при старте: tickingarea add circle X Y Z 2 drone_<id>.
   if (!TickingAreas.add(st.id, st.dimId, st.pos)) st.areaRetryAt = system.currentTick + 1;
   playLaunchFx(st);
   return st;
 }
 
-/** Создаёт дрон в воздухе. Флаг полёта ставится сразу, чтобы §10 не снял дрон «без ПУ». */
-function spawnDrone(dim, typeId, pos, yaw) {
-  let e;
-  try {
-    e = dim.spawnEntity(typeId, pos);
-  } catch (err) {
-    logError("spawnEntity", err);
-    return null;
-  }
-  setDP(e, DP.LAUNCHED, true);
-  try {
-    e.teleport(pos, { rotation: { x: -15, y: yaw } });
-  } catch {}
-  // Повтор события на следующем тике: гарантированно убирает группу rocket:idle
-  // (гравитацию), которую добавляет minecraft:entity_spawned.
-  system.run(() => {
-    if (isValid(e)) safe(() => e.triggerEvent("rocket:route_start"));
-  });
-  return e;
+/**
+ * Пуск с одной ПУ. В полёт уходит дрон на направляющей; если его нет
+ * (снят командой и т.п.), он создаётся на направляющей. ПУ становится пустой.
+ */
+function fireLauncher(launcherId, owner, plan, group) {
+  LAUNCHERS_BUSY.delete(launcherId);
+  const launcher = safe(() => world.getEntity(launcherId), undefined);
+  if (!launcher || !isValid(launcher)) return null;
+  const s = launcherState(launcher);
+  if (!s.loaded || !DRONE_TYPES[s.type]) return null;
+  let drone = railDroneOf(launcher);
+  if (!drone || drone.typeId !== s.type) drone = spawnOnRail(launcher, s.type);
+  if (!drone) return null;
+  const pose = placeOnRail(launcher, drone, s.type);
+  markLauncherEmpty(launcher);
+  const route = buildFlightRoute(pose.pos, plan, launcher.dimension.id);
+  return startFlight(drone, { route, owner, group, echelon: plan.echelon, fromLauncher: true });
 }
 
 /**
- * Выполняет план пуска (одиночный пуск или залп).
- * plan: { typeId, count, target, formation, intervalTicks, spread, cruise, useLaunchers, waypoints }
- * Возвращает число дронов, поставленных в очередь на пуск.
+ * Залп: K выбранных ПУ стреляют по очереди через CONFIG.SALVO_INTERVAL тиков.
+ * picks — элементы scanBattery().ready.
  */
-function executeLaunch(player, plan) {
-  const dim = player.dimension,
-    dimId = dim.id,
-    cfg = DRONE_TYPES[plan.typeId];
-  if (!cfg) return 0;
-  const origin = vcopy(player.location);
-  const view = safe(() => player.getViewDirection(), { x: 0, y: 0, z: 1 });
-  const hdg = horizontalHeading(origin, plan.target, view);
-  const right = { x: -hdg.z, y: 0, z: hdg.x };
-  const count = clamp(Math.floor(plan.count), 1, CONFIG.MAX_SWARM);
-  const slots = formationSlots(plan.formation, count);
-  const offsetOf = (slot, scale) => ({
-    x: (right.x * slot.lat + hdg.x * slot.back) * scale,
-    y: 0,
-    z: (right.z * slot.lat + hdg.z * slot.back) * scale,
-  });
-
-  // 1) Дроны, уже стоящие на ПУ рядом.
-  const mounted = plan.useLaunchers ? findIdleMountedDrones(dim, origin, plan.typeId, count) : [];
-  for (const e of mounted) RESERVED.add(e.id);
-
-  // 2) Остальные создаются перед игроком (в выживании за предметы).
-  let spawnCount = count - mounted.length;
-  const paid = spawnCount > 0 && needsItems(player);
-  if (paid) {
-    const have = countItems(player, cfg.item);
-    if (have < spawnCount) {
-      msg(player, `§e[БПЛА] В инвентаре только ${have} × «${cfg.name}» (нужно ${spawnCount}).`);
-    }
-    spawnCount = takeItems(player, cfg.item, Math.min(have, spawnCount));
-  }
-  const total = mounted.length + spawnCount;
-  if (total === 0) {
-    msg(player, `§c[БПЛА] Нет доступных дронов «${cfg.name}»: поставьте их на ПУ или возьмите в инвентарь.`);
-    return 0;
-  }
-
-  const group = `З-${nextSequence("bpla:group_seq")}`;
+function launchSalvo(player, picks, plan) {
+  if (!picks.length) return 0;
   const owner = player.name;
-  const interval = Math.max(0, Math.floor(plan.intervalTicks));
-  const anchor = {
-    x: origin.x + hdg.x * CONFIG.LAUNCH_FORWARD,
-    y: origin.y + CONFIG.LAUNCH_HEIGHT,
-    z: origin.z + hdg.z * CONFIG.LAUNCH_FORWARD,
-  };
-  const schedule = (fn, delay) => (delay > 0 ? system.runTimeout(fn, delay) : fn());
-  let k = 0;
-
-  // Пуск с ПУ. Позиция старта — сама ПУ, а слот строя задаёт только смещение точки удара.
-  for (const e of mounted) {
-    const slot = slots[k];
-    const toff = offsetOf(slot, plan.spread);
-    const target = vadd(plan.target, toff);
-    const wpOff = offsetOf(slot, CONFIG.FORMATION_SPACING);
-    schedule(() => {
-      RESERVED.delete(e.id);
-      if (!isValid(e) || getDP(e, DP.LAUNCHED) === true) {
-        msg(findPlayerByName(owner), "§e[БПЛА] Один из дронов на ПУ стал недоступен, пуск пропущен.");
-        return;
-      }
-      const route = buildRoute(e.location, target, {
-        dimId,
-        cruise: plan.cruise,
-        waypoints: plan.waypoints,
-        waypointOffset: wpOff,
-      });
-      startFlight(e, { route, owner, group, cruise: plan.cruise, toff, fromLauncher: true });
-    }, k * interval);
-    k++;
-  }
-
-  // Пуск «из планшета»: строй в воздухе перед игроком, дроны разнесены по слотам.
-  for (let i = 0; i < spawnCount; i++) {
-    const slot = slots[k];
-    const toff = offsetOf(slot, plan.spread);
-    const target = vadd(plan.target, toff);
-    const wpOff = offsetOf(slot, CONFIG.FORMATION_SPACING);
-    const spawnPos = findFreeSpawnPoint(dim, vadd(anchor, offsetOf(slots[i], CONFIG.FORMATION_SPACING)));
-    schedule(() => {
-      const route = buildRoute(spawnPos, target, {
-        dimId,
-        cruise: plan.cruise,
-        waypoints: plan.waypoints,
-        waypointOffset: wpOff,
-      });
-      const first = route[0];
-      const yaw = Math.atan2(-(first.x - spawnPos.x), first.z - spawnPos.z) * DEG;
-      const e = spawnDrone(dim, plan.typeId, spawnPos, yaw);
-      if (!e) {
-        const pl = findPlayerByName(owner);
-        if (paid) giveItems(pl, cfg.item, 1);
-        msg(pl, "§c[БПЛА] Не удалось создать дрон (точка старта не загружена?).");
-        return;
-      }
-      startFlight(e, { route, owner, group, cruise: plan.cruise, toff, fromLauncher: false, yaw, pitch: -15 });
-    }, k * interval);
-    k++;
-  }
-
-  const parts = [];
-  if (mounted.length) parts.push(`с ПУ: ${mounted.length}`);
-  if (spawnCount) parts.push(`с планшета: ${spawnCount}`);
+  const group = picks.length > 1 ? `З-${nextSequence("bpla:group_seq")}` : "";
+  const snapshot = JSON.parse(JSON.stringify(plan));
+  picks.forEach((p, i) => {
+    LAUNCHERS_BUSY.add(p.id);
+    const fire = () => {
+      const st = fireLauncher(p.id, owner, snapshot, group);
+      const pl = findPlayerByName(owner);
+      if (!st) msg(pl, `§e[БПЛА] ПУ №${i + 1} недоступна (разряжена или уничтожена), пуск пропущен.`);
+      else actionbar(pl, `§aПуск ${i + 1}/${picks.length}: ${st.callsign}`);
+    };
+    if (i === 0) fire();
+    else system.runTimeout(fire, i * CONFIG.SALVO_INTERVAL);
+  });
+  RouteHistory.push(player, snapshot);
+  const t = snapshot.target;
   msg(
     player,
-    `§a[БПЛА] ${total > 1 ? `Залп ${group}` : "Пуск"}: ${total} × ${cfg.name} » ${fmtPos(plan.target)} ` +
-      `§7(${parts.join(", ")}${total > 1 ? `, интервал ${interval / 20} с` : ""})`,
+    `§a[БПЛА] ${picks.length > 1 ? `Залп ${group}` : "Пуск"}: ${picks.length} дрон(ов), ` +
+      `точек маршрута: ${snapshot.waypoints.length}, цель X: ${Math.floor(t.x)}, Z: ${Math.floor(t.z)}` +
+      (picks.length > 1 ? ` §7(очередь: 1 пуск в ${CONFIG.SALVO_INTERVAL} тиков)` : ""),
   );
-  return total;
+  return picks.length;
 }
 
-/** Пуск конкретного дрона на ПУ (клик по дрону с планшетом в руке). */
-function launchSpecificDrone(player, entity, target, cruise, waypoints) {
-  if (!isValid(entity) || getDP(entity, DP.LAUNCHED) === true) {
-    msg(player, "§c[БПЛА] Этот дрон уже запущен или недоступен.");
-    return null;
+/**
+ * Пуск конкретного дрона (клик по дрону на ПУ). Дрон на ПУ стреляет со своей
+ * направляющей. Дрон без ПУ (из старых миров) взлетает с места.
+ */
+function launchDrone(player, drone, plan) {
+  if (!isValid(drone) || isDroneLaunched(drone)) return null;
+  const lid = getDP(drone, DP.LAUNCHER_ID);
+  const launcher = typeof lid === "string" ? safe(() => world.getEntity(lid), undefined) : undefined;
+  let st;
+  if (launcher && isValid(launcher) && launcherState(launcher).loaded) {
+    st = fireLauncher(launcher.id, player.name, plan, "");
+  } else {
+    const route = buildFlightRoute(drone.location, plan, drone.dimension.id);
+    st = startFlight(drone, { route, owner: player.name, echelon: plan.echelon, fromLauncher: true });
   }
-  const dimId = entity.dimension.id;
-  const route = buildRoute(entity.location, target, { dimId, cruise, waypoints });
-  const st = startFlight(entity, { route, owner: player.name, cruise, fromLauncher: true });
-  if (st) msg(player, `§a[БПЛА] Старт произведён! ${st.callsign} » ${fmtPos(target)}`);
+  if (st) RouteHistory.push(player, plan);
   return st;
 }
 
 /**
- * Коррекция цели в полёте. nominal — «центр» цели для залпа.
- * К нему добавляется собственное смещение дрона (toff), поэтому залп сохраняет раскладку ударов.
+ * Коррекция цели в полёте: новый маршрут от текущей позиции дрона до цели
+ * target = {x, y|null, z} на его высоте эшелона.
  */
-function retargetDrone(st, nominal, cruise) {
+function retargetDrone(st, target) {
   if (!st || st.dead || st.hit || !st.launched || !isValid(st.entity)) return false;
-  const target = { x: nominal.x + st.toff.x, y: nominal.y, z: nominal.z + st.toff.z };
-  st.cruise = cruise;
-  st.route = buildRoute(st.pos, target, { dimId: st.dimId, cruise, climb: false });
+  const plan = { echelon: Math.max(st.echelon, st.pos.y), waypoints: [], target };
+  st.route = buildFlightRoute(st.pos, plan, st.dimId, { climb: false });
   st.turned = 0;
+  st.wpBest = Infinity;
   persistRoute(st);
-  setDP(st.entity, DP.CRUISE, cruise);
   return true;
 }
-
 // ============================================================================
 // §9  UI-ПЛАНШЕТ (@minecraft/server-ui)
 // ============================================================================
 // Экраны:
 //   Главное меню
-//    ├─ Пуск дронов: тип, цель (X/Y/Z, отмеченная точка, блок под прицелом,
-//    │   шаблон), количество, строй, интервал, разброс, высота марша,
-//    │   дроны на ПУ, точки маршрута
-//    ├─ Активные дроны: список летящих → карточка дрона → коррекция цели
-//    │   (для одного дрона или всего залпа) или подрыв
-//    ├─ Шаблоны целей: сохранить свою позицию, отмеченную точку или
-//    │   введённые координаты; просмотр, пуск по шаблону, удаление
-//    ├─ Архив маршрутов: повтор прошлых маршрутов (как у «Пульта архива маршрутов»)
-//    └─ Служебное: состояние зон тиков, уборка, аварийное удаление
+//    ├─ Пуск: батарея (готовые ПУ) → тип дронов → ползунок 1..N_ready → залп очередью
+//    ├─ Маршрут и цель: цепочка «Старт (ПУ) -> Точка 1 -> ... -> Конечная цель»;
+//    │   цель и путевые точки ставятся через карту, точки можно
+//    │   редактировать, удалять, маршрут — очистить
+//    ├─ Тактическая карта: сетка с ПУ, точками, целью, дронами и игроком;
+//    │   масштаб, сдвиг по сторонам света, выбор клетки, переходы к объектам
+//    ├─ Активные дроны: список → карточка → новая цель на карте или подрыв
+//    ├─ Шаблоны целей, Архив маршрутов, Служебное (зоны тиков)
 // Формы собираются обёртками ModalBuilder и MenuBuilder: поля адресуются по
 // ключам, а не по индексам, поэтому необязательные поля не сбивают разбор ответа.
 
 const UI_BUSY = new Set(); // игроки, у которых сейчас открыт планшет
-const LAST_BLOCK_CAPTURE = new Map(); // playerId -> тик последней отметки блока
+const LAST_BLOCK_CLICK = new Map(); // playerId -> тик последнего ПКМ планшетом по блоку
 
 /** Показывает форму. Если игрок занят (открыт чат или инвентарь), повторяет попытку. */
 async function showForm(player, form) {
@@ -2432,52 +2504,41 @@ function lookAtBlock(player) {
   }
 }
 
-/** Источники цели для выпадающего списка: ручной ввод, отмеченная точка, прицел, шаблоны. */
-function targetSources(player, dimId) {
-  const list = [{ label: "Ввести вручную (поля X / Y / Z ниже)", kind: "manual" }];
-  const cap = Captures.get(player);
-  if (cap && cap.dim === dimId)
-    list.push({ label: `Отмеченная пультом точка: ${fmtPos(cap)}`, kind: "point", point: cap });
-  if (safe(() => player.dimension.id, "") === dimId) {
-    const look = lookAtBlock(player);
-    if (look) list.push({ label: `Блок под прицелом: ${fmtPos(look)}`, kind: "point", point: look });
-  }
-  for (const p of Presets.all()) {
-    if (p.dim === dimId) list.push({ label: `Шаблон «${p.name}»: ${fmtPos(p)}`, kind: "point", point: p, preset: p });
-  }
-  return list;
-}
-
-/** Значения полей X/Y/Z по умолчанию: подсказка → отмеченная точка → прицел → позиция игрока. */
-function defaultTargetFields(player, hint) {
-  const dimId = player.dimension.id;
-  let p = hint && isPoint(hint) ? hint : null;
-  if (!p) {
-    const cap = Captures.get(player);
-    if (cap && cap.dim === dimId) p = cap;
-  }
-  if (!p) p = lookAtBlock(player);
-  if (!p) p = player.location;
-  const f = floorPoint(p);
-  return { x: String(f.x), y: String(f.y), z: String(f.z) };
-}
-
-/**
- * Определяет цель из ответа формы: либо разбирает X/Y/Z, либо берёт точку
- * выбранного источника. Возвращает { ok, point } или { ok: false, error }.
- */
-function resolveTarget(player, sources, r, dimId, base) {
-  const src = sources[r.source] ?? sources[0];
-  if (src.kind === "manual") return parseTargetFields(r.x, r.y, r.z, base, dimId);
-  return validateTarget(blockCenter(src.point), base, dimId);
-}
-
 function flyingDrones() {
   return [...DRONES.values()].filter((st) => st.launched && !st.dead && isValid(st.entity));
 }
 
 function canControl(player, st) {
   return !CONFIG.ONLY_OWNER_CAN_CONTROL || !st.owner || st.owner === player.name;
+}
+
+const COMPASS = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"];
+/** Направление от from к to по сторонам света (север — это -Z). */
+function compass(from, to) {
+  const a = Math.atan2(to.x - from.x, -(to.z - from.z));
+  return COMPASS[((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8];
+}
+
+/** Подпись цели: «X, Y, Z». Y — число или «рельеф» (с текущей высотой, если чанк загружен). */
+function targetCoords(t, dimId) {
+  if (Number.isFinite(t.y)) return `${Math.floor(t.x)}, ${Math.floor(t.y)}, ${Math.floor(t.z)}`;
+  const g = terrainHeight(dimId, t.x, t.z);
+  return `${Math.floor(t.x)}, рельеф${g !== null ? ` ${g}` : ""}, ${Math.floor(t.z)}`;
+}
+
+/** Цепочка маршрута: «Старт (ПУ) -> Точка 1 [X, Y, Z] -> ... -> Конечная цель [X, Y, Z]». */
+function routeChainLines(plan) {
+  const lines = ["§aСтарт (ПУ)"];
+  plan.waypoints.forEach((w, i) => lines.push(`§7 -> §eТочка ${i + 1} [${fmtPos(w).split(" ").join(", ")}]`));
+  lines.push(
+    plan.target ? `§7 -> §cКонечная цель [${targetCoords(plan.target, plan.dim)}]` : "§7 -> §8Конечная цель не задана",
+  );
+  return lines;
+}
+
+function routeShort(plan) {
+  if (!plan.target) return plan.waypoints.length ? `точек: ${plan.waypoints.length}, цель не задана` : "не задан";
+  return `точек: ${plan.waypoints.length}, цель X: ${Math.floor(plan.target.x)}, Z: ${Math.floor(plan.target.z)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2488,144 +2549,532 @@ async function showMainMenu(player) {
   const dimId = player.dimension.id;
   const flying = flyingDrones();
   const own = flying.filter((st) => st.owner === player.name).length;
-  const cap = Captures.get(player);
-  const wps = Routes.waypointsFor(player);
+  const bat = scanBattery(player);
+  const plan = RoutePlan.forDimension(player);
   const lines = [
     `§7Измерение: §f${dimName(dimId)}§7, позиция: §f${fmtPos(player.location)}`,
-    cap
-      ? `§7Отмеченная точка: §e${fmtPos(cap)}§7 (${dimName(cap.dim)})`
-      : "§7Отмеченная точка: §8нет (ПКМ планшетом по блоку)",
-    wps.length ? `§7Точек пульта маршрута: §e${wps.length}` : null,
-    `§7В воздухе: §f${flying.length}§7 (ваших: §f${own}§7)`,
-    `§7Зоны тиков дронов: §f${TickingAreas.count()}/${CONFIG.MAX_DRONE_AREAS}`,
-  ].filter(Boolean);
-
+    `§7Батарея (до ${CONFIG.BATTERY_RADIUS} бл.): §aготово ${bat.ready.length}§7, пустых ${bat.empty.length}` +
+      (bat.busy ? `, в очереди пуска ${bat.busy}` : ""),
+    `§7Маршрут: §f${routeShort(plan)}`,
+    `§7В воздухе: §f${flying.length}§7 (ваших: §f${own}§7), зоны тиков: §f${TickingAreas.count()}/${CONFIG.MAX_DRONE_AREAS}`,
+  ];
   await new MenuBuilder("§lПланшет БПЛА", lines.join("\n"))
-    .button("§lПуск дронов§r\n§8Одиночный пуск или залп", "textures/items/rocket_icon", () => showLaunchForm(player))
-    .button(
-      `§lАктивные дроны (${flying.length})§r\n§8Коррекция цели в полёте`,
-      "textures/items/remote_icon_target",
-      () => showActiveDrones(player),
+    .button(`§lПуск§r\n§8Готово ПУ: ${bat.ready.length}`, "textures/items/rocket_icon", () => showLaunch(player))
+    .button("§lМаршрут и цель§r\n§8Редактор маршрута", "textures/items/remote_icon_waypoint", () =>
+      showRouteEditor(player),
     )
-    .button(
-      `§lШаблоны целей (${Presets.all().length})§r\n§8Сохранить, выбрать, удалить`,
-      "textures/items/remote_icon_waypoint",
-      () => showPresets(player),
+    .button("§lТактическая карта§r\n§8Обзор и выбор точек", "textures/items/remote_icon_target", () =>
+      showMap(player, { mode: "browse", back: showMainMenu }),
     )
-    .button(
-      `§lАрхив маршрутов (${Routes.history(player).length})§r\n§8Повторить удар`,
-      "textures/items/remote_icon_orange",
-      () => showArchive(player),
+    .button(`§lАктивные дроны (${flying.length})§r\n§8Коррекция цели в полёте`, "textures/items/shahed3_icon", () =>
+      showActiveDrones(player),
+    )
+    .button(`§lШаблоны целей (${Presets.all().length})§r`, undefined, () => showPresets(player))
+    .button(`§lАрхив маршрутов (${RouteHistory.all(player).length})§r`, "textures/items/remote_icon_orange", () =>
+      showArchive(player),
     )
     .button("§lСлужебное§r\n§8Зоны тиков", "textures/items/launcher_icon", () => showService(player))
     .show(player);
 }
 
 // ---------------------------------------------------------------------------
-// Пуск дронов (одиночный и залп)
+// Тактическая карта
 // ---------------------------------------------------------------------------
+// Карта — текстовая сетка 15×11 клеток. Каждая клетка — 2 символа одинаковой
+// ширины (6 px в шрифте Minecraft), поэтому колонки ровные и клетка почти
+// квадратная. Центр карты — курсор. Север сверху, восток справа.
+// Столбцы подписаны буквами A–P (без I), строки — номерами 01–11.
+const MAP_COLS = 15;
+const MAP_ROWS = 11;
+const MAP_CX = 7;
+const MAP_CY = 5;
+const MAP_COL_LABELS = "ABCDEFGHJKLMNOP";
+
+function mapScale(view) {
+  return CONFIG.MAP_ZOOMS[view.zoom];
+}
+
+function worldToCell(view, p) {
+  const s = mapScale(view);
+  return { col: Math.round((p.x - view.x) / s) + MAP_CX, row: Math.round((p.z - view.z) / s) + MAP_CY };
+}
+
+function cellToWorld(view, col, row) {
+  const s = mapScale(view);
+  return { x: view.x + (col - MAP_CX) * s, z: view.z + (row - MAP_CY) * s };
+}
+
+/** Строит строки карты и список объектов за её краем. */
+function renderMap(player, view, plan) {
+  const grid = [];
+  for (let r = 0; r < MAP_ROWS; r++) grid.push(new Array(MAP_COLS).fill(null));
+  const offscreen = [];
+  const put = (p, label, color, prio, name) => {
+    const { col, row } = worldToCell(view, p);
+    if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) {
+      if (name) offscreen.push(`${color}${name}§7 ${Math.round(hdist(view, p))} бл. ${compass(view, p)}`);
+      return;
+    }
+    const cur = grid[row][col];
+    if (!cur || cur.prio < prio) grid[row][col] = { label, color, prio };
+  };
+  const dim = player.dimension;
+  const radius = mapScale(view) * Math.hypot(MAP_COLS / 2 + 1, MAP_ROWS / 2 + 1);
+  const center = { x: view.x, y: player.location.y, z: view.z };
+
+  put(player.location, "OP", "§b", 2.5, "вы"); // игрок поверх значков ПУ, но под точками и целью
+  for (const l of safe(() => dim.getEntities({ type: LAUNCHER_TYPE, location: center, maxDistance: radius }), [])) {
+    if (isValid(l)) put(l.location, "PU", launcherState(l).loaded ? "§a" : "§7", 2);
+  }
+  for (const d of flyingDrones()) if (d.dimId === dim.id) put(d.pos, "DR", "§d", 3);
+  plan.waypoints.forEach((w, i) => put(w, `W${i + 1}`, "§e", 4, `W${i + 1}`));
+  if (plan.target) put(plan.target, "XX", "§c", 5, "цель");
+
+  const under = grid[MAP_CY][MAP_CX];
+  grid[MAP_CY][MAP_CX] = { label: under ? under.label : "##", color: "§6", prio: 9 };
+
+  const header = "§8++" + [...MAP_COL_LABELS].map((ch, i) => `${i === MAP_CX ? "§6" : "§7"}${ch}§8-`).join("");
+  const rows = grid.map(
+    (cells, r) =>
+      `${r === MAP_CY ? "§6" : "§7"}${String(r + 1).padStart(2, "0")}` +
+      cells.map((cell) => (cell ? cell.color + cell.label : "§8--")).join(""),
+  );
+  return { lines: [header, ...rows], offscreen, under };
+}
+
+const MAP_MODE_TITLES = {
+  browse: "обзор",
+  target: "выбор конечной цели",
+  waypoint: "новая путевая точка",
+  move: "перенос точки",
+  retarget: "новая цель для дрона",
+};
+
 /**
- * prefill: {
- *   drone?: Entity                 — пуск конкретного дрона с ПУ (без полей залпа),
- *   presetId?: string              — заранее выбранный шаблон,
- *   target?: Vector3               — подсказка для X/Y/Z,
- *   fields?: {x,y,z}               — введённые ранее значения (повтор после ошибки),
- *   waypoints?: Vector3[], useRoute?: boolean
- * }
+ * Экран карты. ctx: { mode, back(player), index? (для move: номер точки, -1 — цель), droneId? }.
+ * Курсор всегда в центре; «выбор точки» = центр карты в мировых координатах X/Z.
  */
-async function showLaunchForm(player, prefill = {}) {
+async function showMap(player, ctx) {
   if (!isValid(player)) return;
   const dimId = player.dimension.id;
-  const drone = prefill.drone && isValid(prefill.drone) ? prefill.drone : null;
-  const prefs = LaunchPrefs.get(player);
-  const sources = targetSources(player, dimId);
-  let srcIdx = 0;
-  if (prefill.presetId) {
-    const i = sources.findIndex((s) => s.preset && s.preset.id === prefill.presetId);
-    if (i >= 0) srcIdx = i;
-  }
-  const def = prefill.fields ?? defaultTargetFields(player, prefill.target);
-  const wps = prefill.waypoints ?? Routes.waypointsFor(player);
+  const view = MapViews.get(player);
+  const plan = RoutePlan.forDimension(player);
+  const s = mapScale(view);
+  const map = renderMap(player, view, plan);
+  const ground = terrainHeight(dimId, view.x, view.z);
+  const lines = [
+    `§7Режим: §f${MAP_MODE_TITLES[ctx.mode] ?? ctx.mode}`,
+    `§7Масштаб: §f1 клетка = ${s} бл.§7, обзор ${s * MAP_COLS}×${s * MAP_ROWS} бл., север сверху`,
+    `§fКурсор: §eX: ${view.x}, Z: ${view.z}§7 | рельеф: ${ground !== null ? `Y ${ground}` : "чанк не загружен"}` +
+      ` | до вас ${Math.round(hdist(view, player.location))} бл.`,
+    "",
+    ...map.lines,
+    "",
+    "§bOP§7 вы  §aPU§7 ПУ заряжена  §7PU§7 пустая  §eW1§7 точка  §cXX§7 цель  §dDR§7 дрон  §6##§7 курсор",
+  ];
+  if (map.offscreen.length) lines.push(`§7За краем карты: ${map.offscreen.join("§7, ")}`);
 
-  const m = new ModalBuilder(drone ? `Пуск: ${DRONE_TYPES[drone.typeId].name}` : "Пуск дронов");
-  if (!drone) {
-    m.dropdown(
-      "type",
-      "Тип дрона",
-      DRONE_TYPE_IDS.map((id) => DRONE_TYPES[id].name),
-      prefs.type,
+  const here = `\n§8X: ${view.x}, Z: ${view.z}`;
+  const point = { x: view.x, z: view.z };
+  const menu = new MenuBuilder(`Тактическая карта: ${MAP_MODE_TITLES[ctx.mode] ?? ""}`, lines.join("\n"));
+
+  // Действие с точкой под курсором (зависит от режима).
+  if (ctx.mode === "target" || ctx.mode === "browse") {
+    menu.button(`§2Установить конечную цель здесь${here}`, undefined, () =>
+      applyMapPoint(player, ctx, point, "target"),
     );
   }
-  m.dropdown(
-    "source",
-    "Цель (если выбрана точка или шаблон, поля X/Y/Z не используются)",
-    sources.map((s) => s.label),
-    srcIdx,
-  )
-    .text("x", "X", "например 120 или ~10", def.x)
-    .text("y", "Y", "например 64 или ~", def.y)
-    .text("z", "Z", "например -340 или ~-5", def.z);
-  if (!drone) {
-    m.slider("count", "Количество дронов", 1, CONFIG.MAX_SWARM, 1, prefs.count)
-      .dropdown(
-        "formation",
-        "Строй залпа",
-        FORMATIONS.map((f) => f.name),
-        prefs.formation,
-      )
-      .slider("interval", "Интервал между пусками, сек", 0, 5, 1, prefs.interval)
-      .slider("spread", "Разброс точек удара, блоков", 0, 10, 1, prefs.spread);
+  if ((ctx.mode === "waypoint" || ctx.mode === "browse") && plan.waypoints.length < CONFIG.MAX_WAYPOINTS) {
+    menu.button(`§2Добавить путевую точку W${plan.waypoints.length + 1} здесь${here}`, undefined, () =>
+      applyMapPoint(player, ctx, point, "waypoint"),
+    );
   }
-  m.slider("cruise", "Высота марша над целью, блоков", 10, 80, 5, prefs.cruise);
-  if (!drone)
-    m.toggle("useLaunchers", `Сначала дроны на ПУ рядом (до ${CONFIG.LAUNCHER_SEARCH_RADIUS} бл.)`, prefs.useLaunchers);
-  if (wps.length) m.toggle("useRoute", `Лететь через точки пульта маршрута (${wps.length})`, prefill.useRoute ?? true);
-  m.submit(drone ? "Запуск" : "Пуск!");
+  if (ctx.mode === "move") {
+    const label = ctx.index >= 0 ? `точку W${ctx.index + 1}` : "конечную цель";
+    menu.button(`§2Перенести ${label} сюда${here}`, undefined, () => applyMapPoint(player, ctx, point, "move"));
+  }
+  if (ctx.mode === "retarget") {
+    menu.button(`§2Перенацелить дрон сюда${here}`, undefined, () => applyMapPoint(player, ctx, point, "retarget"));
+  }
 
-  const r = await m.show(player);
-  if (!r || !isValid(player)) return;
+  const reopen = (next) => {
+    MapViews.set(player, next);
+    return showMap(player, ctx);
+  };
+  const pan = (dx, dz) =>
+    reopen({ ...view, x: view.x + dx * CONFIG.MAP_PAN_CELLS * s, z: view.z + dz * CONFIG.MAP_PAN_CELLS * s });
 
-  // Запоминаем настройки для следующего открытия формы.
-  const nextPrefs = { ...prefs, cruise: r.cruise };
-  if (!drone) {
-    Object.assign(nextPrefs, {
-      type: r.type,
-      count: r.count,
-      formation: r.formation,
-      interval: r.interval,
-      spread: r.spread,
-      useLaunchers: r.useLaunchers,
+  menu.button("Выбрать клетку (буква + номер)", undefined, () => showMapCellPicker(player, ctx, view));
+  if (view.zoom > 0) {
+    menu.button(`Приблизить (+Zoom)\n§81 клетка = ${CONFIG.MAP_ZOOMS[view.zoom - 1]} бл.`, undefined, () =>
+      reopen({ ...view, zoom: view.zoom - 1 }),
+    );
+  }
+  if (view.zoom < CONFIG.MAP_ZOOMS.length - 1) {
+    menu.button(`Отдалить (-Zoom)\n§81 клетка = ${CONFIG.MAP_ZOOMS[view.zoom + 1]} бл.`, undefined, () =>
+      reopen({ ...view, zoom: view.zoom + 1 }),
+    );
+  }
+  menu
+    .button("↑ СЕВЕР", undefined, () => pan(0, -1))
+    .button("↓ ЮГ", undefined, () => pan(0, 1))
+    .button("← ЗАПАД", undefined, () => pan(-1, 0))
+    .button("→ ВОСТОК", undefined, () => pan(1, 0))
+    .button("К пусковой позиции", "textures/items/launcher_icon", () => reopen({ ...view, ...launchPosition(player) }))
+    .button("Перейти к… (вы, прицел, цель, шаблон, координаты)", undefined, () => showMapGoto(player, ctx, view))
+    .button("« Назад", undefined, () => ctx.back(player));
+  await menu.show(player);
+}
+
+/** Центр батареи (заряженные ПУ, иначе все ПУ рядом) или позиция игрока. */
+function launchPosition(player) {
+  const bat = scanBattery(player);
+  const list = bat.ready.length ? bat.ready : bat.empty;
+  if (!list.length) return { x: Math.floor(player.location.x), z: Math.floor(player.location.z) };
+  let x = 0,
+    z = 0;
+  for (const it of list) {
+    const l = safe(() => it.launcher.location, player.location);
+    x += l.x;
+    z += l.z;
+  }
+  return { x: Math.floor(x / list.length), z: Math.floor(z / list.length) };
+}
+
+/** Выбор клетки по букве столбца и номеру строки: курсор переходит в центр этой клетки. */
+async function showMapCellPicker(player, ctx, view) {
+  const r = await new ModalBuilder("Выбор клетки на карте")
+    .dropdown("col", "Столбец (буква)", [...MAP_COL_LABELS], MAP_CX)
+    .dropdown(
+      "row",
+      "Строка (номер)",
+      Array.from({ length: MAP_ROWS }, (_, i) => String(i + 1).padStart(2, "0")),
+      MAP_CY,
+    )
+    .submit("Перейти")
+    .show(player);
+  if (r) MapViews.set(player, { ...view, ...cellToWorld(view, r.col, r.row) });
+  return showMap(player, ctx);
+}
+
+/** Быстрый переход курсора к объектам или к введённым координатам. */
+async function showMapGoto(player, ctx, view) {
+  const plan = RoutePlan.forDimension(player);
+  const go = (p) => {
+    MapViews.set(player, { ...view, x: Math.floor(p.x), z: Math.floor(p.z) });
+    return showMap(player, ctx);
+  };
+  const menu = new MenuBuilder("Перейти к…", "§7Курсор карты переместится к выбранному объекту.");
+  menu.button("Моя позиция", undefined, () => go(player.location));
+  const look = lookAtBlock(player);
+  if (look) menu.button(`Блок под прицелом\n§8X: ${look.x}, Z: ${look.z}`, undefined, () => go(look));
+  if (plan.target) menu.button("Конечная цель маршрута", undefined, () => go(plan.target));
+  plan.waypoints.forEach((w, i) => menu.button(`Точка W${i + 1}`, undefined, () => go(w)));
+  for (const p of Presets.all()
+    .filter((p) => p.dim === player.dimension.id)
+    .slice(0, 20)) {
+    menu.button(`Шаблон «${p.name}»\n§8X: ${p.x}, Z: ${p.z}`, undefined, () => go(p));
+  }
+  menu.button("Ввести X / Z вручную", undefined, async () => {
+    const r = await new ModalBuilder("Координаты курсора")
+      .text("x", "X (можно ~ от вашей позиции)", "например 120", String(view.x))
+      .text("z", "Z (можно ~ от вашей позиции)", "например -340", String(view.z))
+      .submit("Перейти")
+      .show(player);
+    if (!r) return showMap(player, ctx);
+    const base = player.location;
+    const x = parseCoordinate(r.x, base.x),
+      z = parseCoordinate(r.z, base.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      msg(player, "§c[БПЛА] Координаты должны быть числами (можно ~ для относительных).");
+      return showMap(player, ctx);
+    }
+    return go({ x, z });
+  });
+  menu.button("« К карте", undefined, () => showMap(player, ctx));
+  await menu.show(player);
+}
+
+/** Ползунок «Высота эшелона» (Y). Возвращает число или null, если форму закрыли. */
+async function askEchelon(player, def, title) {
+  const [, maxY] = dimLimits(player.dimension.id);
+  const note = maxY - 3 < CONFIG.ECHELON_MAX ? ` (здесь не выше ${maxY - 3})` : "";
+  const r = await new ModalBuilder(title)
+    .slider("y", `Высота эшелона (Y)${note}`, CONFIG.ECHELON_MIN, CONFIG.ECHELON_MAX, 5, def)
+    .submit("Готово")
+    .show(player);
+  return r ? clamp(r.y, CONFIG.ECHELON_MIN, maxY - 3) : null;
+}
+
+/** Применение точки, выбранной на карте. */
+async function applyMapPoint(player, ctx, point, action) {
+  if (hdist(point, player.location) > CONFIG.MAX_RANGE) {
+    msg(player, `§c[БПЛА] Точка дальше ${CONFIG.MAX_RANGE} блоков от вас.`);
+    return showMap(player, ctx);
+  }
+  const plan = RoutePlan.forDimension(player);
+  const xz = { x: Math.floor(point.x), z: Math.floor(point.z) };
+
+  if (action === "target") {
+    plan.target = { x: xz.x, y: null, z: xz.z };
+    RoutePlan.set(player, plan);
+    msg(player, `§a[БПЛА] Конечная цель: X: ${xz.x}, Z: ${xz.z} (высота по рельефу).`);
+    return ctx.mode === "browse" ? showRouteEditor(player) : ctx.back(player);
+  }
+  if (action === "waypoint") {
+    if (plan.waypoints.length >= CONFIG.MAX_WAYPOINTS) {
+      msg(player, `§c[БПЛА] В маршруте уже ${CONFIG.MAX_WAYPOINTS} точек.`);
+      return showMap(player, ctx);
+    }
+    const n = plan.waypoints.length + 1;
+    const y = await askEchelon(player, plan.echelon, `Путевая точка W${n}`);
+    if (y === null) return showMap(player, ctx);
+    plan.waypoints.push({ x: xz.x, y, z: xz.z });
+    plan.echelon = y;
+    RoutePlan.set(player, plan);
+    msg(player, `§a[БПЛА] Точка W${n}: X: ${xz.x}, Y: ${y}, Z: ${xz.z}.`);
+    return ctx.mode === "browse" ? showRouteEditor(player) : ctx.back(player);
+  }
+  if (action === "move") {
+    if (ctx.index >= 0 && plan.waypoints[ctx.index]) {
+      plan.waypoints[ctx.index] = { ...plan.waypoints[ctx.index], x: xz.x, z: xz.z };
+      msg(player, `§a[БПЛА] Точка W${ctx.index + 1} перенесена: X: ${xz.x}, Z: ${xz.z}.`);
+    } else if (ctx.index === -1 && plan.target) {
+      plan.target = { ...plan.target, x: xz.x, z: xz.z };
+      msg(player, `§a[БПЛА] Конечная цель перенесена: X: ${xz.x}, Z: ${xz.z}.`);
+    }
+    RoutePlan.set(player, plan);
+    return ctx.back(player);
+  }
+  if (action === "retarget") return applyRetarget(player, ctx.droneId, { x: xz.x, y: null, z: xz.z }, ctx);
+  return ctx.back(player);
+}
+
+// ---------------------------------------------------------------------------
+// Редактор маршрута
+// ---------------------------------------------------------------------------
+/** Открывает карту в режиме выбора с курсором на заданной точке. */
+function openMapAt(player, focus, ctx) {
+  if (focus) {
+    const view = MapViews.get(player);
+    MapViews.set(player, { ...view, x: Math.floor(focus.x), z: Math.floor(focus.z) });
+  }
+  return showMap(player, ctx);
+}
+
+async function showRouteEditor(player) {
+  if (!isValid(player)) return;
+  const stored = RoutePlan.get(player);
+  const plan = RoutePlan.forDimension(player);
+  const lines = [...routeChainLines(plan)];
+  if (stored.dim !== plan.dim && RoutePlan.hasPoints(stored))
+    lines.push("§6Маршрут из другого измерения здесь не действует.");
+  lines.push("", `§7Точек: ${plan.waypoints.length}/${CONFIG.MAX_WAYPOINTS}. Эшелон по умолчанию: Y ${plan.echelon}.`);
+  const back = (p) => showRouteEditor(p);
+  const lastPoint = plan.waypoints[plan.waypoints.length - 1] ?? plan.target;
+
+  const menu = new MenuBuilder("Маршрут и цель", lines.join("\n"));
+  menu.button("§lПоставить конечную цель через карту", "textures/items/remote_icon_target", () =>
+    openMapAt(player, plan.target, { mode: "target", back }),
+  );
+  if (plan.waypoints.length < CONFIG.MAX_WAYPOINTS) {
+    menu.button("Добавить путевую точку (Waypoint)", "textures/items/remote_icon_waypoint", () =>
+      openMapAt(player, lastPoint, { mode: "waypoint", back }),
+    );
+  }
+  if (RoutePlan.hasPoints(plan)) {
+    menu.button("Редактировать точку", undefined, () => showPointPicker(player, "edit"));
+    menu.button("Удалить точку", undefined, () => showPointPicker(player, "delete"));
+    menu.button("§cОчистить маршрут", undefined, async () => {
+      if (await confirmAction(player, "Очистка маршрута", "Удалить все путевые точки и цель?", "§cОчистить")) {
+        RoutePlan.set(player, { ...RoutePlan.empty(player.dimension.id), echelon: plan.echelon });
+        msg(player, "§e[БПЛА] Маршрут очищен.");
+      }
+      return showRouteEditor(player);
     });
   }
-  LaunchPrefs.set(player, nextPrefs);
+  if (plan.target) menu.button("§2§lПуск по маршруту", "textures/items/rocket_icon", () => showLaunch(player));
+  menu.button("« Назад", undefined, () => showMainMenu(player));
+  await menu.show(player);
+}
 
-  const res = resolveTarget(player, sources, r, dimId, player.location);
-  if (!res.ok) {
-    msg(player, `§c[БПЛА] ${res.error}`);
-    return showLaunchForm(player, { ...prefill, fields: { x: r.x, y: r.y, z: r.z } });
+/** Выбор точки маршрута для редактирования или удаления. */
+async function showPointPicker(player, action) {
+  const plan = RoutePlan.forDimension(player);
+  const menu = new MenuBuilder(
+    action === "edit" ? "Редактировать точку" : "Удалить точку",
+    "§7Выберите точку маршрута.",
+  );
+  const pick = (index) => () => {
+    if (action === "edit") return showPointEdit(player, index);
+    const p = RoutePlan.forDimension(player);
+    if (index >= 0) p.waypoints.splice(index, 1);
+    else p.target = null;
+    RoutePlan.set(player, p);
+    msg(player, `§e[БПЛА] ${index >= 0 ? `Точка W${index + 1}` : "Конечная цель"} удалена.`);
+    return showRouteEditor(player);
+  };
+  plan.waypoints.forEach((w, i) =>
+    menu.button(`§eТочка ${i + 1}§r\n§8[${fmtPos(w).split(" ").join(", ")}]`, undefined, pick(i)),
+  );
+  if (plan.target) menu.button(`§cКонечная цель§r\n§8[${targetCoords(plan.target, plan.dim)}]`, undefined, pick(-1));
+  menu.button("« Назад", undefined, () => showRouteEditor(player));
+  await menu.show(player);
+}
+
+/** Редактирование точки: перенос на карте или смена высоты. index -1 — конечная цель. */
+async function showPointEdit(player, index) {
+  const plan = RoutePlan.forDimension(player);
+  const pt = index >= 0 ? plan.waypoints[index] : plan.target;
+  if (!pt) return showRouteEditor(player);
+  const name = index >= 0 ? `Точка W${index + 1}` : "Конечная цель";
+  const coords = index >= 0 ? fmtPos(pt).split(" ").join(", ") : targetCoords(pt, plan.dim);
+  const back = (p) => showPointEdit(p, index);
+  await new MenuBuilder(name, `§f${name}: [${coords}]`)
+    .button("Сдвинуть на карте", "textures/items/remote_icon_target", () =>
+      openMapAt(player, pt, { mode: "move", index, back }),
+    )
+    .button(index >= 0 ? "Изменить высоту эшелона (Y)" : "Изменить высоту цели (Y)", undefined, async () => {
+      const p = RoutePlan.forDimension(player);
+      if (index >= 0) {
+        const y = await askEchelon(player, p.waypoints[index].y, name);
+        if (y !== null) {
+          p.waypoints[index].y = y;
+          RoutePlan.set(player, p);
+        }
+        return showPointEdit(player, index);
+      }
+      const [minY, maxY] = dimLimits(player.dimension.id);
+      const r = await new ModalBuilder("Высота цели")
+        .dropdown("mode", "Высота цели", ["По рельефу (авто)", "Задать вручную"], Number.isFinite(p.target.y) ? 1 : 0)
+        .text(
+          "y",
+          `Y вручную (${minY}..${maxY - 1})`,
+          "например 64",
+          Number.isFinite(p.target.y) ? String(p.target.y) : "",
+        )
+        .submit("Готово")
+        .show(player);
+      if (r) {
+        if (r.mode === 0) p.target.y = null;
+        else {
+          const y = Math.floor(Number(String(r.y).trim()));
+          if (!Number.isFinite(y) || y < minY || y >= maxY)
+            msg(player, `§c[БПЛА] Y должен быть в пределах ${minY}..${maxY - 1}.`);
+          else p.target.y = y;
+        }
+        RoutePlan.set(player, p);
+      }
+      return showPointEdit(player, index);
+    })
+    .button("« К маршруту", undefined, () => showRouteEditor(player))
+    .show(player);
+}
+
+// ---------------------------------------------------------------------------
+// Пуск с батареи
+// ---------------------------------------------------------------------------
+async function showLaunch(player) {
+  if (!isValid(player)) return;
+  const plan = RoutePlan.forDimension(player);
+  if (!plan.target) {
+    msg(player, "§e[БПЛА] Сначала поставьте конечную цель на карте.");
+    return showRouteEditor(player);
   }
-  const waypoints = r.useRoute ? wps : null;
+  const bat = scanBattery(player);
+  if (!bat.ready.length) {
+    actionbar(player, "§cНет готовых к пуску установок!");
+    msg(
+      player,
+      `§c[БПЛА] Нет готовых к пуску установок! §7Зарядите ПУ предметом дрона (радиус ${CONFIG.BATTERY_RADIUS} бл.).`,
+    );
+    return;
+  }
+  const byType = new Map();
+  for (const r of bat.ready) byType.set(r.type, (byType.get(r.type) ?? 0) + 1);
+  const counts = [...byType].map(([t, n]) => `${DRONE_TYPES[t].name} ×${n}`).join(", ");
+  const lines = [
+    ...routeChainLines(plan),
+    "",
+    `§7Готово к пуску: §a${bat.ready.length} ПУ§7 (${counts}). Пустых: ${bat.empty.length}.`,
+    `§7Дроны стартуют со своих ПУ по очереди, 1 пуск в ${CONFIG.SALVO_INTERVAL} тиков.`,
+  ];
+  const menu = new MenuBuilder("Пуск с батареи", lines.join("\n"));
+  menu.button(`§2§lВсе готовые ПУ (${bat.ready.length})`, "textures/items/rocket_icon", () =>
+    showLaunchCount(player, null),
+  );
+  if (byType.size > 1) {
+    for (const [t, n] of byType)
+      menu.button(`Только ${DRONE_TYPES[t].name} (${n})`, DRONE_TYPES[t].icon, () => showLaunchCount(player, t));
+  }
+  menu.button("Маршрут и цель", undefined, () => showRouteEditor(player));
+  menu.button("« Назад", undefined, () => showMainMenu(player));
+  await menu.show(player);
+}
 
-  if (drone) {
-    launchSpecificDrone(player, drone, res.point, r.cruise, waypoints);
-  } else {
-    executeLaunch(player, {
-      typeId: DRONE_TYPE_IDS[r.type] ?? DRONE_TYPE_IDS[0],
-      count: r.count,
-      target: res.point,
-      formation: (FORMATIONS[r.formation] ?? FORMATIONS[0]).id,
-      intervalTicks: r.interval * 20,
-      spread: r.spread,
-      cruise: r.cruise,
-      useLaunchers: r.useLaunchers,
-      waypoints,
+/** Количество дронов: ползунок строго 1..N_ready. typeId null — все типы. */
+async function showLaunchCount(player, typeId) {
+  const pool = () => scanBattery(player).ready.filter((r) => !typeId || r.type === typeId);
+  const ready = pool();
+  const n = ready.length;
+  if (!n) {
+    actionbar(player, "§cНет готовых к пуску установок!");
+    return showLaunch(player);
+  }
+  const plan = RoutePlan.forDimension(player);
+  const m = new ModalBuilder(`Пуск: готово ${n} ПУ${typeId ? ` (${DRONE_TYPES[typeId].name})` : ""}`);
+  if (n > 1) m.slider("count", "Количество дронов для запуска", 1, n, 1, 1);
+  if (!plan.waypoints.length)
+    m.slider("echelon", "Высота эшелона (Y)", CONFIG.ECHELON_MIN, CONFIG.ECHELON_MAX, 5, plan.echelon);
+  let k = 1;
+  if (m.keys.length) {
+    m.submit("Пуск!");
+    const r = await m.show(player);
+    if (!r) return showLaunch(player);
+    if (n > 1) k = clamp(Math.round(r.count), 1, n);
+    if (r.echelon !== undefined) {
+      plan.echelon = r.echelon;
+      RoutePlan.set(player, plan);
+    }
+  }
+  // Батарея могла измениться, пока была открыта форма: отбираем заново.
+  const picks = pool().slice(0, k);
+  if (picks.length < k) msg(player, `§e[БПЛА] Готово только ${picks.length} ПУ из выбранных ${k}.`);
+  if (!picks.length) {
+    actionbar(player, "§cНет готовых к пуску установок!");
+    return;
+  }
+  launchSalvo(player, picks, RoutePlan.forDimension(player));
+}
+
+/** Меню ПУ (клик планшетом по ПУ или по дрону на ней). */
+async function showLauncherMenu(player, launcher) {
+  if (!isValid(player) || !isValid(launcher)) return;
+  const s = launcherState(launcher);
+  const plan = RoutePlan.forDimension(player);
+  const mine = !s.owner || s.owner === player.name;
+  const lines = [
+    `§7Статус: ${s.loaded ? `§aзаряжена (${DRONE_TYPES[s.type]?.name ?? s.type})` : "§7пусто"}`,
+    s.owner ? `§7Зарядил: §f${s.owner}` : null,
+    s.loaded && !mine ? `§cЭта ПУ заряжена игроком ${s.owner}, управлять ей нельзя.` : null,
+    `§7Позиция: §f${fmtPos(launcher.location)}`,
+    "",
+    ...routeChainLines(plan),
+  ].filter((l) => l !== null);
+  const menu = new MenuBuilder("Пусковая установка", lines.join("\n"));
+  if (s.loaded && mine && !LAUNCHERS_BUSY.has(launcher.id)) {
+    if (plan.target) {
+      menu.button("§2§lПуск с этой ПУ по маршруту", "textures/items/rocket_icon", () => {
+        launchSalvo(player, [{ id: launcher.id, launcher, type: s.type, dist: 0 }], plan);
+      });
+    }
+    menu.button("Разрядить (дрон вернётся в инвентарь)", undefined, () => {
+      if (unloadLauncher(player, launcher)) actionbar(player, "§eПУ разряжена.");
     });
   }
-  if (waypoints) {
-    // Маршрут израсходован (как в оригинале после старта с ПУ).
-    Routes.setLast(player, undefined);
-    PENDING_WAYPOINTS.delete(player.id);
-  }
+  menu.button("Маршрут и цель", "textures/items/remote_icon_waypoint", () => showRouteEditor(player));
+  menu.button("Закрыть", undefined, () => {});
+  await menu.show(player);
 }
 
 // ---------------------------------------------------------------------------
@@ -2637,12 +3086,11 @@ async function showActiveDrones(player) {
   const pl = player.location;
   const distTo = (st) => (st.dimId === player.dimension.id ? vdist(st.pos, pl) : 1e9);
   all.sort((a, b) => (b.owner === player.name ? 1 : 0) - (a.owner === player.name ? 1 : 0) || distTo(a) - distTo(b));
-  const shown = all.slice(0, 40);
   const body = all.length
     ? `§7В воздухе: §f${all.length}§7. Выберите дрон, чтобы изменить цель или подорвать его.`
     : "§7Сейчас в воздухе нет дронов.";
   const menu = new MenuBuilder("Активные дроны", body);
-  for (const st of shown) {
+  for (const st of all.slice(0, 40)) {
     const t = finalTarget(st);
     const head = `§l${st.callsign}§r ${st.cfg.name}${st.owner ? ` §8(${st.owner})` : ""}${st.hit ? " §c[сбит]" : ""}`;
     const tail = `§8${fmtPos(st.pos)} » ${t ? fmtPos(t) : "нет цели"} · ${Math.round(remainingPath(st))} м`;
@@ -2687,18 +3135,18 @@ async function showDroneDetails(player, droneId) {
     st.group ? `§7Залп: §f${st.group}§7 (в воздухе: ${groupSize})` : null,
     `§7Состояние: §f${dronePhase(st)}`,
     `§7Позиция: §f${fmtPos(st.pos)}§7 (${dimName(st.dimId)})`,
-    `§7Цель: §f${t ? fmtPos(t) : "не назначена"}`,
+    `§7Цель: §f${t ? `${fmtPos(t)}${t.auto ? " (рельеф)" : ""}` : "не назначена"}`,
     `§7Точек маршрута осталось: §f${st.route.length}`,
     t ? `§7До цели по маршруту: §f${Math.round(rem)} м§7, около §f${Math.ceil(rem / spd)} с` : null,
-    `§7Скорость: §f${spd.toFixed(1)} бл/с§7, высота марша: §f${st.cruise}`,
+    `§7Скорость: §f${spd.toFixed(1)} бл/с§7, эшелон: §fY ${Math.round(st.echelon)}`,
     `§7Зона тиков: ${area ? `§a${area.name}§7 @ ${area.x} ${area.y} ${area.z}` : "§cнет (лимит или ожидание)"}`,
   ].filter(Boolean);
 
   const menu = new MenuBuilder(`Дрон ${st.callsign}`, lines.join("\n"));
   const allowed = canControl(player, st);
-  if (allowed && !st.hit) {
-    menu.button("§lИзменить цель§r\n§8Коррекция в полёте", "textures/items/remote_icon_target", () =>
-      showRetargetForm(player, droneId),
+  if (allowed && !st.hit && st.dimId === player.dimension.id) {
+    menu.button("§lИзменить цель на карте§r\n§8Коррекция в полёте", "textures/items/remote_icon_target", () =>
+      openMapAt(player, t, { mode: "retarget", droneId, back: (p) => showDroneDetails(p, droneId) }),
     );
   }
   if (allowed) {
@@ -2715,52 +3163,35 @@ async function showDroneDetails(player, droneId) {
   await menu.show(player);
 }
 
-async function showRetargetForm(player, droneId, fields) {
-  if (!isValid(player)) return;
+/** Новая цель с карты для дрона или всего его залпа. */
+async function applyRetarget(player, droneId, target, ctx) {
   const st = DRONES.get(droneId);
   if (!st || st.dead || st.hit || !st.launched || !isValid(st.entity)) {
     msg(player, "§e[БПЛА] Дрон недоступен для коррекции.");
     return showActiveDrones(player);
   }
-  const sources = targetSources(player, st.dimId);
-  const t = finalTarget(st);
-  // По умолчанию подставляется «номинальная» цель, то есть без смещения дрона в залпе.
-  const def =
-    fields ??
-    (t
-      ? { x: String(Math.floor(t.x - st.toff.x)), y: String(Math.floor(t.y)), z: String(Math.floor(t.z - st.toff.z)) }
-      : defaultTargetFields(player));
   const group = st.group ? flyingDrones().filter((o) => o.group === st.group && !o.hit && canControl(player, o)) : [st];
-
-  const m = new ModalBuilder(`Коррекция цели: ${st.callsign}`)
-    .dropdown(
-      "source",
-      "Новая цель (если выбрана точка или шаблон, поля X/Y/Z не используются)",
-      sources.map((s) => s.label),
-      0,
-    )
-    .text("x", "X", "например 120", def.x)
-    .text("y", "Y", "например 64", def.y)
-    .text("z", "Z", "например -340", def.z)
-    .slider("cruise", "Высота марша над целью, блоков", 10, 80, 5, clamp(Math.round(st.cruise / 5) * 5, 10, 80));
-  if (group.length > 1) m.toggle("wholeGroup", `Применить ко всему залпу ${st.group} (${group.length} дронов)`, true);
-  m.submit("Перенацелить");
-
-  const r = await m.show(player);
-  if (!r) return showDroneDetails(player, droneId);
-  const base = player.dimension.id === st.dimId ? player.location : st.pos;
-  const res = resolveTarget(player, sources, r, st.dimId, base);
-  if (!res.ok) {
-    msg(player, `§c[БПЛА] ${res.error}`);
-    return showRetargetForm(player, droneId, { x: r.x, y: r.y, z: r.z });
+  let list = [st];
+  if (group.length > 1) {
+    let choice = null;
+    await new MenuBuilder("Кого перенацелить?", `§7Новая цель: X: ${target.x}, Z: ${target.z}`)
+      .button(`Только ${st.callsign}`, undefined, () => {
+        choice = [st];
+      })
+      .button(`Весь залп ${st.group} (${group.length})`, undefined, () => {
+        choice = group;
+      })
+      .button("Отмена", undefined, () => {})
+      .show(player);
+    if (!choice) return showMap(player, ctx);
+    list = choice;
   }
-  const list = r.wholeGroup ? group : [DRONES.get(droneId)];
   let n = 0;
-  for (const d of list) if (retargetDrone(d, res.point, r.cruise)) n++;
+  for (const d of list) if (retargetDrone(d, target)) n++;
   msg(
     player,
     n
-      ? `§a[БПЛА] Цель изменена (${n} дрон.): » ${fmtPos(res.point)}`
+      ? `§a[БПЛА] Цель изменена (${n} дрон.): X: ${target.x}, Z: ${target.z}.`
       : "§c[БПЛА] Не удалось изменить цель: дрон уже не в воздухе.",
   );
   return showDroneDetails(player, droneId);
@@ -2772,21 +3203,32 @@ async function showRetargetForm(player, droneId, fields) {
 async function showPresets(player) {
   if (!isValid(player)) return;
   const list = Presets.all();
-  const cap = Captures.get(player);
+  const plan = RoutePlan.forDimension(player);
+  const view = MapViews.get(player);
   const pdim = player.dimension.id;
   const menu = new MenuBuilder(
     "Шаблоны целей",
     `§7Сохранено: §f${list.length}/${CONFIG.MAX_PRESETS}§7. Шаблоны общие для всех игроков и сохраняются вместе с миром.`,
   );
   menu.button("§2+ Сохранить мою позицию", "textures/items/remote_icon_waypoint", () =>
-    showSavePreset(player, "position"),
+    showSavePreset(player, floorPoint(player.location)),
   );
-  if (cap) {
-    menu.button(`§2+ Сохранить отмеченную точку§r\n§8${fmtPos(cap)}`, "textures/items/remote_icon_target", () =>
-      showSavePreset(player, "capture"),
+  if (plan.target) {
+    menu.button("§2+ Сохранить конечную цель маршрута", "textures/items/remote_icon_target", () =>
+      showSavePreset(player, {
+        x: plan.target.x,
+        y: plan.target.y ?? terrainHeight(pdim, plan.target.x, plan.target.z) ?? Math.floor(player.location.y),
+        z: plan.target.z,
+      }),
     );
   }
-  menu.button("§2+ Добавить по координатам", undefined, () => showSavePreset(player, "manual"));
+  menu.button(`§2+ Сохранить курсор карты§r\n§8X: ${view.x}, Z: ${view.z}`, undefined, () =>
+    showSavePreset(player, {
+      x: view.x,
+      y: terrainHeight(pdim, view.x, view.z) ?? Math.floor(player.location.y),
+      z: view.z,
+    }),
+  );
   for (const p of list) {
     const dist = p.dim === pdim ? ` · ${Math.round(hdist(p, player.location))} м` : "";
     menu.button(`§l${p.name}§r\n§8${fmtPos(p)} · ${dimName(p.dim)}${dist}`, undefined, () =>
@@ -2797,51 +3239,21 @@ async function showPresets(player) {
   await menu.show(player);
 }
 
-/** kind: "position" (позиция игрока) | "capture" (отмеченная точка) | "manual" (ввод X/Y/Z). */
-async function showSavePreset(player, kind, fields) {
+async function showSavePreset(player, point) {
   if (!isValid(player)) return;
   const dimId = player.dimension.id;
-  let point = null,
-    pointDim = dimId;
-  if (kind === "position") point = floorPoint(player.location);
-  else if (kind === "capture") {
-    const cap = Captures.get(player);
-    if (!cap) return showPresets(player);
-    point = cap;
-    pointDim = cap.dim;
-  }
   const fallbackName = `Точка ${Presets.all().length + 1}`;
-  const where = point ? ` (${fmtPos(point)}, ${dimName(pointDim)})` : "";
-  const m = new ModalBuilder("Новый шаблон").text(
-    "name",
-    `Название точки${where}`,
-    "например: База противника",
-    fields?.name ?? fallbackName,
-  );
-  if (kind === "manual") {
-    const d = fields ?? defaultTargetFields(player);
-    m.text("x", "X", "например 120 или ~10", d.x)
-      .text("y", "Y", "например 64", d.y)
-      .text("z", "Z", "например -340", d.z);
-  }
-  m.submit("Сохранить");
-
-  const r = await m.show(player);
+  const r = await new ModalBuilder("Новый шаблон")
+    .text("name", `Название точки (${fmtPos(point)}, ${dimName(dimId)})`, "например: База противника", fallbackName)
+    .submit("Сохранить")
+    .show(player);
   if (!r) return showPresets(player);
   const name = cleanName(r.name, fallbackName);
-  if (kind === "manual") {
-    const res = parseTargetFields(r.x, r.y, r.z, player.location, dimId);
-    if (!res.ok) {
-      msg(player, `§c[БПЛА] ${res.error}`);
-      return showSavePreset(player, kind, { name: r.name, x: r.x, y: r.y, z: r.z });
-    }
-    point = floorPoint(res.point);
-  }
-  const res = Presets.add({ name, x: point.x, y: point.y, z: point.z, dim: pointDim, author: player.name });
+  const res = Presets.add({ name, x: point.x, y: point.y, z: point.z, dim: dimId, author: player.name });
   msg(
     player,
     res.ok
-      ? `§a[БПЛА] Шаблон «${name}» ${res.replaced ? "обновлён" : "сохранён"}: ${fmtPos(point)} (${dimName(pointDim)})`
+      ? `§a[БПЛА] Шаблон «${name}» ${res.replaced ? "обновлён" : "сохранён"}: ${fmtPos(point)} (${dimName(dimId)})`
       : `§c[БПЛА] ${res.error}`,
   );
   return showPresets(player);
@@ -2864,12 +3276,16 @@ async function showPresetDetails(player, id) {
   ];
   const menu = new MenuBuilder("Шаблон цели", lines.join("\n"));
   if (same) {
-    menu.button("§lПуск по шаблону", "textures/items/rocket_icon", () => showLaunchForm(player, { presetId: p.id }));
-    menu.button("Отметить как точку цели", "textures/items/remote_icon_target", () => {
-      Captures.set(player, p, p.dim);
-      msg(player, `§e[БПЛА] Отмеченная точка: ${fmtPos(p)} («${p.name}»).`);
-      return showPresetDetails(player, id);
+    menu.button("§lСделать конечной целью маршрута", "textures/items/remote_icon_target", () => {
+      const plan = RoutePlan.forDimension(player);
+      plan.target = { x: p.x, y: null, z: p.z };
+      RoutePlan.set(player, plan);
+      msg(player, `§a[БПЛА] Конечная цель: «${p.name}» (X: ${p.x}, Z: ${p.z}).`);
+      return showRouteEditor(player);
     });
+    menu.button("Показать на карте", undefined, () =>
+      openMapAt(player, p, { mode: "browse", back: (pl) => showPresetDetails(pl, id) }),
+    );
   }
   menu.button("§cУдалить", undefined, async () => {
     if (await confirmAction(player, "Удаление шаблона", `Удалить шаблон «${p.name}»?`, "§cУдалить")) {
@@ -2882,40 +3298,35 @@ async function showPresetDetails(player, id) {
 }
 
 // ---------------------------------------------------------------------------
-// Архив маршрутов (поведение «Пульта архива маршрутов» из оригинала)
+// Архив маршрутов
 // ---------------------------------------------------------------------------
 async function showArchive(player) {
   if (!isValid(player)) return;
-  const list = Routes.history(player).slice().reverse();
+  const list = RouteHistory.all(player).slice().reverse();
   const menu = new MenuBuilder(
     "Архив маршрутов",
     list.length
-      ? `§7Выберите маршрут для повторного удара. Удар неточный: разброс около ${CONFIG.ROUTE_SCATTER} блоков.`
-      : "§7Архив маршрутов пуст. Маршрут попадает в архив, когда вы отмечаете цель планшетом.",
+      ? `§7Выберите маршрут: он станет текущим. Удар неточный: разброс около ${CONFIG.ROUTE_SCATTER} блоков.`
+      : "§7Архив пуст. Маршрут попадает в архив при пуске.",
   );
   for (const it of list) {
-    const last = it.route[it.route.length - 1];
-    menu.button(`${it.route.length} точ. | ${fmtTime(it.time || 0)}\n§8цель ${fmtPos(last)}`, undefined, () =>
-      loadArchivedRoute(player, it),
+    const t = it.plan.target;
+    menu.button(
+      `${it.plan.waypoints.length} точ. | ${fmtTime(it.time)}\n§8цель X: ${Math.floor(t.x)}, Z: ${Math.floor(t.z)}`,
+      undefined,
+      () => {
+        const plan = JSON.parse(JSON.stringify(it.plan));
+        plan.dim = player.dimension.id;
+        plan.target.x = Math.floor(plan.target.x + (Math.random() * 2 - 1) * CONFIG.ROUTE_SCATTER);
+        plan.target.z = Math.floor(plan.target.z + (Math.random() * 2 - 1) * CONFIG.ROUTE_SCATTER);
+        RoutePlan.set(player, plan);
+        msg(player, `§6[БПЛА] Маршрут из архива загружен (разброс ~${CONFIG.ROUTE_SCATTER} м).`);
+        return showRouteEditor(player);
+      },
     );
   }
   menu.button("« Назад", undefined, () => showMainMenu(player));
   await menu.show(player);
-}
-
-function loadArchivedRoute(player, item) {
-  const route = item.route.filter(isPoint).map(vcopy);
-  if (!route.length) return showArchive(player);
-  const last = route[route.length - 1];
-  last.x += (Math.random() * 2 - 1) * CONFIG.ROUTE_SCATTER;
-  last.z += (Math.random() * 2 - 1) * CONFIG.ROUTE_SCATTER;
-  Routes.setLast(player, route);
-  msg(
-    player,
-    `§6[БПЛА] Маршрут из архива загружен! Удар неточный (разброс ~${CONFIG.ROUTE_SCATTER} м). ` +
-      "Нажмите на БПЛА на ПУ или запустите из формы.",
-  );
-  return showLaunchForm(player, { target: last, waypoints: route.slice(0, -1), useRoute: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -2961,122 +3372,140 @@ async function showService(player) {
     .button("« Назад", undefined, () => showMainMenu(player))
     .show(player);
 }
-
 // ============================================================================
-// §10 ВВОД ИГРОКА: ПУЛЬТЫ, КЛИК ПО ДРОНУ, УСТАНОВКА НА ПУ
+// §10 ВВОД ИГРОКА: ЗАРЯДКА ПУ, ПУЛЬТЫ, КЛИКИ ПО ПУ И ДРОНАМ
 // ============================================================================
 
-/** «Пульт маршрута»: промежуточная точка на CONFIG.WAYPOINT_ALT блоков выше блока. */
+/** «Пульт маршрута»: путевая точка на CONFIG.WAYPOINT_ALT блоков выше блока. */
 function addWaypoint(player, loc) {
-  const list = PENDING_WAYPOINTS.get(player.id) ?? [];
-  if (list.length >= CONFIG.MAX_WAYPOINTS) {
+  const plan = RoutePlan.forDimension(player);
+  if (plan.waypoints.length >= CONFIG.MAX_WAYPOINTS) {
     msg(player, `§c[БПЛА] Уже ${CONFIG.MAX_WAYPOINTS} точек! Отметь цель планшетом.`);
     return;
   }
   const [, maxY] = dimLimits(player.dimension.id);
-  list.push({ x: loc.x + 0.5, y: Math.min(loc.y + CONFIG.WAYPOINT_ALT, maxY - 3), z: loc.z + 0.5 });
-  PENDING_WAYPOINTS.set(player.id, list);
-  msg(player, `§a[БПЛА] Точка ${list.length}/${CONFIG.MAX_WAYPOINTS} записана!`);
+  const w = { x: loc.x, y: Math.min(loc.y + CONFIG.WAYPOINT_ALT, maxY - 3), z: loc.z };
+  plan.waypoints.push(w);
+  RoutePlan.set(player, plan);
+  msg(player, `§a[БПЛА] Точка ${plan.waypoints.length}/${CONFIG.MAX_WAYPOINTS} записана: ${fmtPos(w)}`);
 }
 
 /**
- * Планшет, ПКМ по блоку: блок становится отмеченной точкой (целью).
- * Маршрут с пульта маршрута завершается и сохраняется в архив, как в
- * оригинале. Затем открывается форма пуска; с Shift точка только отмечается.
+ * Планшет, ПКМ по блоку: блок становится конечной целью маршрута (точка удара
+ * над этим блоком), затем открывается редактор маршрута. С Shift цель только отмечается.
  */
 function onTabletBlock(player, loc, sneaking) {
   if (!isValid(player)) return;
-  LAST_BLOCK_CAPTURE.set(player.id, system.currentTick);
-  const dimId = player.dimension.id;
-  Captures.set(player, loc, dimId);
-  const target = blockCenter(loc);
-  const pending = Routes.pending(player);
-  const route = [...pending, target];
-  Routes.setLast(player, route);
-  Routes.pushHistory(player, route);
-  PENDING_WAYPOINTS.delete(player.id);
-  if (pending.length) {
-    msg(
-      player,
-      `§e[БПЛА] Маршрут готов: ${pending.length} точ. + цель ${fmtPos(loc)}. Нажми на БПЛА на ПУ или запусти с планшета.`,
-    );
-  } else {
-    msg(player, `§e[БПЛА] Цель отмечена: ${fmtPos(loc)}.`);
-  }
-  if (!sneaking)
-    openTablet(player, (p) => showLaunchForm(p, { target, waypoints: pending, useRoute: pending.length > 0 }));
+  LAST_BLOCK_CLICK.set(player.id, system.currentTick);
+  const plan = RoutePlan.forDimension(player);
+  plan.target = { x: loc.x, y: loc.y + 1, z: loc.z };
+  RoutePlan.set(player, plan);
+  msg(player, `§e[БПЛА] Конечная цель отмечена: ${fmtPos(loc)} (точек маршрута: ${plan.waypoints.length}).`);
+  if (!sneaking) openTablet(player, showRouteEditor);
 }
 
-/** Клик по дрону (data-driven запуск rocket:start_flight отменён, пуском управляет скрипт). */
-function onDroneClicked(player, target, holdingTablet) {
-  if (!isValid(player) || !isValid(target)) return;
-  if (isDroneLaunched(target)) {
+/** Предмет дрона по блоку: ванильная установка отменена, заряжается ПУ рядом с блоком. */
+function onDroneItemOnBlock(player, loc, itemId) {
+  if (!isValid(player)) return;
+  const center = { x: loc.x + 0.5, y: loc.y + 1, z: loc.z + 0.5 };
+  const near = safe(
+    () => player.dimension.getEntities({ type: LAUNCHER_TYPE, location: center, maxDistance: 2.5 }),
+    [],
+  );
+  if (near.length && isValid(near[0])) loadLauncher(player, near[0], itemId);
+  else actionbar(player, "§eДрон заряжается в пусковую установку: нажмите предметом по ПУ.");
+}
+
+/** Клик по ПУ: предмет дрона — зарядка; планшет — меню ПУ; иначе — статус. */
+function onLauncherClicked(player, launcher, heldId) {
+  if (!isValid(player) || !isValid(launcher)) return;
+  if (heldId && ITEM_TO_DRONE[heldId]) {
+    loadLauncher(player, launcher, heldId);
+    return;
+  }
+  if (heldId && TABLET_ITEMS.has(heldId)) {
+    openTablet(player, (p) => showLauncherMenu(p, launcher));
+    return;
+  }
+  const s = launcherState(launcher);
+  actionbar(
+    player,
+    s.loaded ? `§aПУ [Заряжена]: ${DRONE_TYPES[s.type]?.name ?? s.type}` : "§7ПУ пуста: нажмите по ней предметом дрона",
+  );
+}
+
+/**
+ * Клик по дрону. Скрипт полностью управляет пуском, поэтому data-driven
+ * запуск rocket:start_flight отменяется.
+ */
+function onDroneClicked(player, drone, heldId) {
+  if (!isValid(player) || !isValid(drone)) return;
+  if (isDroneLaunched(drone)) {
     msg(player, "§c[БПЛА] Ракета уже в полёте!");
     return;
   }
-  if (RESERVED.has(target.id)) {
-    msg(player, "§e[БПЛА] Этот дрон уже назначен в залп и ждёт своей очереди.");
+  const lid = getDP(drone, DP.LAUNCHER_ID);
+  const launcher = typeof lid === "string" ? safe(() => world.getEntity(lid), undefined) : undefined;
+  if (heldId && ITEM_TO_DRONE[heldId]) {
+    actionbar(player, "§cНа этой установке уже заряжен дрон!");
     return;
   }
-  if (holdingTablet) {
-    openTablet(player, (p) => showLaunchForm(p, { drone: target }));
+  if (launcher && LAUNCHERS_BUSY.has(launcher.id)) {
+    msg(player, "§e[БПЛА] Эта ПУ уже в очереди залпа.");
     return;
   }
-  const route = Routes.last(player);
-  if (!route) {
-    msg(player, "§c[БПЛА] Маршрут не задан пультом! Отметь цель планшетом (ПКМ по блоку) или открой планшет.");
+  if (heldId && TABLET_ITEMS.has(heldId) && launcher && isValid(launcher)) {
+    openTablet(player, (p) => showLauncherMenu(p, launcher));
     return;
   }
-  const st = startFlight(target, { route, owner: player.name, cruise: CONFIG.WAYPOINT_ALT, fromLauncher: true });
-  Routes.setLast(player, undefined);
+  const plan = RoutePlan.forDimension(player);
+  if (!plan.target) {
+    msg(player, "§c[БПЛА] Маршрут не задан! Откройте планшет: «Маршрут и цель».");
+    return;
+  }
+  if (launcher && isValid(launcher)) {
+    const s = launcherState(launcher);
+    if (s.owner && s.owner !== player.name) {
+      msg(player, `§c[БПЛА] Эта ПУ заряжена игроком ${s.owner}.`);
+      return;
+    }
+  }
+  const st = launchDrone(player, drone, plan);
   if (st) msg(player, `§a[БПЛА] Старт произведён! Позывной: ${st.callsign}.`);
 }
 
 /**
- * Установка нового дрона на ближайшую ПУ (до 6 блоков). Если ПУ рядом нет,
- * дрон снимается, как в оригинале. Исключение — дроны с freePlacement.
+ * Дрон, появившийся не через зарядку (например, /summon), ставится на
+ * ближайшую пустую ПУ (до 6 блоков). Если все ПУ рядом заряжены или ПУ нет,
+ * дрон снимается: 1 ПУ = 1 дрон.
  */
 function tryMountOnLauncher(entity, tries) {
   try {
-    if (!isValid(entity) || getDP(entity, DP.LAUNCHED) === true) return;
-    const cfg = DRONE_TYPES[entity.typeId];
-    if (!cfg) return;
-    if (cfg.freePlacement) {
-      registerDrone(entity);
-      return;
-    }
+    if (!isValid(entity) || isDroneLaunched(entity) || getDP(entity, DP.LAUNCHER_ID) !== undefined) return;
     const dim = entity.dimension;
-    const near = dim.getEntities({ location: entity.location, maxDistance: 6, type: LAUNCHER_TYPE });
-    if (!near.length) {
-      if (tries < 10) {
-        system.runTimeout(() => tryMountOnLauncher(entity, tries + 1), 4);
-        return;
-      }
-      for (const pl of dim.getPlayers({ location: entity.location, maxDistance: 10 })) {
-        msg(pl, "§c[БПЛА] Этот дрон можно ставить только на ПУ!");
-      }
-      entity.remove();
+    const near = dim
+      .getEntities({ location: entity.location, maxDistance: 6, type: LAUNCHER_TYPE })
+      .filter((l) => isValid(l));
+    const free = near.find((l) => !LAUNCHERS_BUSY.has(l.id) && !launcherState(l).loaded);
+    if (free) {
+      placeOnRail(free, entity, entity.typeId);
+      const owner = dim.getPlayers({ location: entity.location, maxDistance: 10 })[0];
+      markLauncherLoaded(free, entity.typeId, owner ? owner.name : "", entity.id);
       return;
     }
-    const launcher = near[0],
-      lr = launcher.getRotation(),
-      ll = launcher.location,
-      rad = lr.y * RAD,
-      m = cfg.mount;
-    const pos = { x: ll.x - Math.sin(rad) * m.z, y: ll.y + m.y, z: ll.z + Math.cos(rad) * m.z };
-    entity.teleport(pos, { rotation: { x: m.p, y: lr.y } });
-    setDP(entity, DP.MOUNT_YAW, lr.y);
-    setDP(entity, DP.MOUNT_PITCH, m.p);
-    writeJSON(entity, DP.MOUNT_POS, pos);
-    safe(() => entity.triggerEvent("rocket:mount"));
-    const st = registerDrone(entity);
-    if (st) st.mount = { yaw: lr.y, pitch: m.p, pos };
+    if (!near.length && tries < 10) {
+      system.runTimeout(() => tryMountOnLauncher(entity, tries + 1), 4);
+      return;
+    }
+    const text = near.length ? "§cНа этой установке уже заряжен дрон!" : "§c[БПЛА] Дрон можно поставить только на ПУ!";
+    for (const pl of dim.getPlayers({ location: entity.location, maxDistance: 10 })) msg(pl, text);
+    entity.remove();
   } catch (err) {
     logError("tryMountOnLauncher", err);
   }
 }
 
-// Пульты: ПКМ по блоку. В before-событии нельзя менять мир, поэтому работа
+// Пульты по блоку. В before-событии мир менять нельзя, поэтому работа
 // откладывается в system.run. Взаимодействие с блоком отменяется, чтобы
 // пульт не открывал сундуки и двери.
 world.beforeEvents.playerInteractWithBlock.subscribe((ev) => {
@@ -3096,37 +3525,77 @@ world.beforeEvents.playerInteractWithBlock.subscribe((ev) => {
   });
 });
 
+// Предмет дрона по блоку: ванильная установка сущности (entity_placer) отменяется,
+// заряжается ПУ рядом с блоком. Это удобно на телефоне, если сама ПУ мелкая цель.
+world.beforeEvents.itemUseOn.subscribe((ev) => {
+  const itemId = ev.itemStack?.typeId;
+  if (!itemId || !ITEM_TO_DRONE[itemId]) return;
+  ev.cancel = true;
+  if (!ev.isFirstEvent) return;
+  const player = ev.source,
+    loc = vcopy(ev.block.location);
+  system.run(() => onDroneItemOnBlock(player, loc, itemId));
+});
+
 // Планшет: ПКМ в воздух открывает главное меню.
 world.afterEvents.itemUse.subscribe((ev) => {
   const player = ev.source,
     item = ev.itemStack;
   if (!item || !TABLET_ITEMS.has(item.typeId) || !isValid(player)) return;
-  // Если в этом же клике только что отмечен блок, второй раз планшет не открываем.
-  const t = LAST_BLOCK_CAPTURE.get(player.id);
+  // Если этим же кликом отмечен блок, второй раз планшет не открываем.
+  const t = LAST_BLOCK_CLICK.get(player.id);
   if (t !== undefined && system.currentTick - t < 10) return;
   openTablet(player, showMainMenu);
 });
 
-// Клик по дрону: запуском управляет скрипт, поэтому ванильное взаимодействие отменяется.
+// Клик по ПУ или по дрону: взаимодействием управляет скрипт.
+// Для заряженной ПУ событие отменяется, и предмет из руки не списывается.
 world.beforeEvents.playerInteractWithEntity.subscribe((ev) => {
   const target = ev.target;
-  if (!target || !DRONE_TYPES[target.typeId]) return;
+  if (!target) return;
+  const typeId = target.typeId;
+  const isLauncher = typeId === LAUNCHER_TYPE;
+  if (!isLauncher && !DRONE_TYPES[typeId]) return;
   ev.cancel = true;
-  const player = ev.player;
-  const holdingTablet = !!ev.itemStack && TABLET_ITEMS.has(ev.itemStack.typeId);
-  system.run(() => onDroneClicked(player, target, holdingTablet));
+  const player = ev.player,
+    heldId = ev.itemStack?.typeId;
+  system.run(() => (isLauncher ? onLauncherClicked(player, target, heldId) : onDroneClicked(player, target, heldId)));
 });
 
-// Новые дроны: установка на ПУ. Загруженные из сохранения попадают прямо в реестр.
+// Появление сущностей: дроны (установка на ПУ) и новые ПУ (подпись «ПУ [Пусто]»).
 world.afterEvents.entitySpawn.subscribe((ev) => {
   const e = ev.entity;
   const typeId = safe(() => e.typeId, "");
+  if (typeId === LAUNCHER_TYPE) {
+    if (ev.cause !== "Loaded") {
+      system.run(() => {
+        if (isValid(e) && getDP(e, LDP.LOADED) === undefined) markLauncherEmpty(e);
+      });
+    }
+    return;
+  }
   if (!DRONE_TYPES[typeId]) return;
   if (ev.cause === "Loaded") {
     registerDrone(e);
     return;
   }
   system.runTimeout(() => tryMountOnLauncher(e, 1), 2);
+});
+
+// ПУ уничтожена: дрон с её направляющей падает предметом.
+world.afterEvents.entityDie.subscribe((ev) => {
+  const dead = ev.deadEntity;
+  const deadId = safe(() => dead.id, undefined);
+  if (!deadId || safe(() => dead.typeId, "") !== LAUNCHER_TYPE) return;
+  LAUNCHERS_BUSY.delete(deadId);
+  for (const st of [...DRONES.values()]) {
+    if (st.launched || !isValid(st.entity) || getDP(st.entity, DP.LAUNCHER_ID) !== deadId) continue;
+    try {
+      st.entity.dimension.spawnItem(new ItemStack(st.cfg.item, 1), st.entity.location);
+      forgetDrone(st);
+      st.entity.remove();
+    } catch {}
+  }
 });
 
 // Попадания по летящему дрону: удар, снаряд, урон. Дрон сбит и падает.
@@ -3153,32 +3622,31 @@ world.afterEvents.entityRemove.subscribe((ev) => {
 });
 
 world.afterEvents.playerLeave.subscribe((ev) => {
-  PENDING_WAYPOINTS.delete(ev.playerId);
   UI_BUSY.delete(ev.playerId);
-  LAST_BLOCK_CAPTURE.delete(ev.playerId);
+  LAST_BLOCK_CLICK.delete(ev.playerId);
   ENG_NEAR.delete(ev.playerId);
 });
 
-/** Строка состояния (action bar) у игрока с планшетом в руке: свои дроны и ближайший к цели. */
+/** Строка состояния (actionbar) у игрока с планшетом в руке: дроны в воздухе, готовые ПУ, цель. */
 function hudTick() {
   for (const pl of world.getAllPlayers()) {
     if (!isValid(pl) || !TABLET_ITEMS.has(heldItemId(pl))) continue;
     const own = flyingDrones().filter((st) => st.owner === pl.name);
-    let text = `§6БПЛА§r в воздухе: §e${own.length}`;
-    if (own.length) {
-      let best = null,
-        bestDist = Infinity;
-      for (const st of own) {
-        const d = remainingPath(st);
-        if (st.route.length && d < bestDist) {
-          best = st;
-          bestDist = d;
-        }
+    let text = `§6БПЛА§r в воздухе: §e${own.length}§r | ПУ готово: §a${scanBattery(pl).ready.length}`;
+    let best = null,
+      bestDist = Infinity;
+    for (const st of own) {
+      const d = remainingPath(st);
+      if (st.route.length && d < bestDist) {
+        best = st;
+        bestDist = d;
       }
-      if (best) text += ` §7| ${best.callsign}: §f${Math.round(bestDist)} м§7 до цели`;
     }
-    const cap = Captures.get(pl);
-    if (cap) text += ` §7| метка: §f${fmtPos(cap)}`;
+    if (best) text += ` §7| ${best.callsign}: §f${Math.round(bestDist)} м§7 до цели`;
+    else {
+      const plan = RoutePlan.forDimension(pl);
+      if (plan.target) text += ` §7| цель X: ${Math.floor(plan.target.x)}, Z: ${Math.floor(plan.target.z)}`;
+    }
     try {
       pl.onScreenDisplay.setActionBar(text);
     } catch {}
@@ -3193,7 +3661,7 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
   if (!ev.id.startsWith("bpla:")) return;
   const reply = (text) => {
     const src = ev.sourceEntity;
-    if (src && src.typeId === "minecraft:player") msg(src, text);
+    if (src && src.typeId === PLAYER_TYPE) msg(src, text);
     else console.warn(text.replace(/§./g, ""));
   };
   if (ev.id === "bpla:areas") {
@@ -3207,7 +3675,6 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
     reply(`§e[БПЛА] Удалено зон дронов: ${TickingAreas.removeAll()}.`);
   }
 });
-
 // ============================================================================
 // §11 ФИЗИКА ОБЛОМКОВ (DEBRIS)
 // ============================================================================
