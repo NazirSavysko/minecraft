@@ -12,13 +12,13 @@
  *   §0  Конфигурация
  *   §1  Утилиты: векторы, углы, безопасные вызовы, JSON-хранилища
  *   §2  Каталог дронов: полёт, звук, взрыв, положение на направляющей ПУ
- *   §3  Хранилища: шаблоны целей (мир), план маршрута, архив, вид карты (игрок)
+ *   §3  Хранилища: шаблоны (мир), план маршрута, архив без дублей, настройки залпа, вид карты
  *   §4  Менеджер зон тиков (tickingarea): создание, следование, удаление, очистка
  *   §5  Эффекты: частицы, дым, вспышка, взрыв, звук двигателей
  *   §6  Коллизии с блоками (AABB, общий модуль для дронов и обломков)
  *   §7  Реестр дронов и полётный контроллер (путевые точки, пикирование, подрыв)
- *   §8  Пусковые установки: 1 ПУ = 1 дрон, батарея, пуск очередью с направляющих
- *   §9  UI-планшет: пуск, редактор маршрута, тактическая карта, активные дроны
+ *   §8  Пусковые установки: 1 ПУ = 1 дрон, батарея, залп (интервал, строй, разброс)
+ *   §9  UI-планшет: пуск, редактор маршрута, тактическая карта с осями, активные дроны
  *   §10 Ввод игрока: зарядка ПУ, пульты, клики по ПУ и дронам
  *   §11 Физика обломков (debris)
  *   §12 Палуба и твёрдые части моделей (игрок может стоять на дроне)
@@ -32,7 +32,9 @@
  *      конечная цель и путевые точки. ПКМ планшетом по блоку сразу делает
  *      его целью (с Shift — без открытия меню).
  *   3. «Пуск»: планшет находит готовые ПУ рядом (батарею). Ползунок 1..N
- *      выбирает число дронов, они стартуют со своих ПУ по очереди.
+ *      выбирает число дронов. Для залпа задаются интервал между пусками,
+ *      строй в полёте (колонна / шеренга / клин) и разброс точек удара
+ *      (0 — все в одну точку). Дроны стартуют со своих ПУ по очереди.
  *   4. «Пульт маршрута»: ПКМ по блоку добавляет путевую точку
  *      (на CONFIG.WAYPOINT_ALT блоков выше блока).
  *   5. Служебные команды: /scriptevent bpla:areas (статус зон тиков),
@@ -51,7 +53,10 @@ import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft
 const CONFIG = {
   // --- Пусковые установки и пуск ------------------------------------------
   BATTERY_RADIUS: 96, // радиус, в котором планшет ищет ПУ игрока (батарею)
-  SALVO_INTERVAL: 18, // тиков между пусками в очереди залпа (ТЗ: 15–20)
+  SALVO_INTERVAL: 18, // интервал между пусками по умолчанию, тиков (меняется ползунком в форме пуска)
+  SALVO_INTERVAL_MAX: 100, // предел ползунка интервала, тиков (20 тиков = 1 секунда)
+  FORMATION_SPACING: 6, // расстояние между соседними трассами в строю «шеренга»/«клин», блоков
+  SPREAD_MAX: 20, // предел ползунка «Разброс точек удара», блоков
   CONSUME_IN_CREATIVE: false, // списывать предмет дрона при зарядке ПУ и в творческом режиме
   DEFAULT_ECHELON: 120, // высота эшелона (абсолютный Y) по умолчанию
   ECHELON_MIN: 80, // пределы ползунка «Высота эшелона»
@@ -59,7 +64,6 @@ const CONFIG = {
   WAYPOINT_ALT: 30, // «Пульт маршрута»: высота точки над блоком (как в оригинале)
   MAX_WAYPOINTS: 8, // максимум путевых точек в маршруте
   MAX_RANGE: 4000, // максимальная горизонтальная дальность цели от игрока
-  ROUTE_SCATTER: 5, // разброс удара при повторе маршрута из архива, блоков
 
   // --- Полёт --------------------------------------------------------------
   SPEED_MULT: 1.0, // общий множитель скорости всех дронов
@@ -90,6 +94,7 @@ const CONFIG = {
   MAP_ZOOMS: [5, 10, 25, 50, 100, 200], // масштабы: блоков в одной клетке
   MAP_DEFAULT_ZOOM: 2, // индекс масштаба по умолчанию (25 блоков)
   MAP_PAN_CELLS: 4, // сдвиг карты кнопками сторон света, клеток
+  MAP_AXES: true, // схема осей координат (±X, ±Z) справа от карты
 
   // --- Шаблоны и UI -------------------------------------------------------
   MAX_PRESETS: 40,
@@ -572,41 +577,81 @@ const RoutePlan = {
 };
 
 /**
- * Архив маршрутов игрока (последние CONFIG.MAX_ROUTE_HISTORY пусков).
+ * Архив маршрутов игрока: последние CONFIG.MAX_ROUTE_HISTORY уникальных маршрутов.
+ * Маршрут определяется измерением, путевыми точками и целью. Повторный пуск
+ * по тому же маршруту не создаёт новую запись, а поднимает старую наверх.
  * Записи старого формата ({ route: [точки...], time }, последняя точка — цель)
  * читаются и преобразуются в план.
  */
 const RouteHistory = {
   KEY: "bpla_route_history",
 
+  /** Ключ уникальности маршрута (эшелон по умолчанию не учитывается). */
+  key(plan) {
+    const r = (v) => (Number.isFinite(v) ? Math.floor(v) : "~");
+    const pts = (plan.waypoints ?? []).map((w) => `${r(w.x)},${r(w.y)},${r(w.z)}`);
+    const t = plan.target ? `${r(plan.target.x)},${r(plan.target.y)},${r(plan.target.z)}` : "-";
+    return [plan.dim, ...pts, t].join("|");
+  },
+
+  /** Все записи, старые первыми, без дублей (из дублей остаётся самая свежая). */
   all(player) {
     const h = readJSON(player, this.KEY, []);
     if (!Array.isArray(h)) return [];
-    const out = [];
+    const dimId = safe(() => player.dimension.id, "minecraft:overworld");
+    const byKey = new Map();
     for (const it of h) {
-      if (it && it.plan && it.plan.target) out.push({ plan: it.plan, time: it.time || 0 });
+      let entry = null;
+      if (it && it.plan && it.plan.target) entry = { plan: it.plan, time: it.time || 0 };
       else if (it && Array.isArray(it.route) && it.route.length && it.route.every(isPoint)) {
         const last = it.route[it.route.length - 1];
-        out.push({
+        entry = {
           plan: {
-            dim: safe(() => player.dimension.id, "minecraft:overworld"),
+            dim: dimId,
             echelon: CONFIG.DEFAULT_ECHELON,
             waypoints: it.route.slice(0, -1),
             target: { x: Math.floor(last.x), y: Math.floor(last.y), z: Math.floor(last.z) },
           },
           time: it.time || 0,
-        });
+        };
       }
+      if (!entry) continue;
+      const k = this.key(entry.plan);
+      const prev = byKey.get(k);
+      if (!prev || prev.time <= entry.time) byKey.set(k, entry);
     }
-    return out;
+    return [...byKey.values()].sort((a, b) => a.time - b.time);
+  },
+
+  save(player, list) {
+    writeJSON(player, this.KEY, list.slice(-CONFIG.MAX_ROUTE_HISTORY));
   },
 
   push(player, plan) {
-    let h = readJSON(player, this.KEY, []);
-    if (!Array.isArray(h)) h = [];
-    h.push({ plan, time: Date.now() });
-    if (h.length > CONFIG.MAX_ROUTE_HISTORY) h = h.slice(h.length - CONFIG.MAX_ROUTE_HISTORY);
-    writeJSON(player, this.KEY, h);
+    const k = this.key(plan);
+    const list = this.all(player).filter((it) => this.key(it.plan) !== k);
+    list.push({ plan, time: Date.now() });
+    this.save(player, list);
+  },
+
+  remove(player, key) {
+    this.save(
+      player,
+      this.all(player).filter((it) => this.key(it.plan) !== key),
+    );
+  },
+};
+
+/** Последние настройки залпа игрока: интервал, строй, разброс. */
+const LaunchPrefs = {
+  KEY: "bpla:launch_prefs",
+  get(player) {
+    const d = { interval: CONFIG.SALVO_INTERVAL, formation: "column", spread: 0 };
+    const saved = readJSON(player, this.KEY, {});
+    return Object.assign(d, saved && typeof saved === "object" ? saved : {});
+  },
+  set(player, prefs) {
+    writeJSON(player, this.KEY, prefs);
   },
 };
 
@@ -1930,8 +1975,12 @@ function areaHousekeeping() {
 //    При пуске K дронов отбирается ровно K ПУ (ближайшие к игроку). Они
 //    становятся пустыми, остальные остаются заряженными.
 //  • Дрон стартует со своей направляющей: позиция ПУ + подъём, курс ПУ,
-//    угол возвышения направляющей. Пуски идут очередью через
-//    CONFIG.SALVO_INTERVAL тиков (system.runTimeout).
+//    угол возвышения направляющей. Пуски идут очередью через интервал,
+//    который задаётся ползунком в форме пуска (system.runTimeout).
+//  • Строй в полёте: «колонна» — все дроны летят одной трассой след в след;
+//    «шеренга» — параллельными трассами бок о бок; «клин» — ведущий впереди,
+//    ведомые парами по бокам. Разброс раскладывает точки удара по той же
+//    схеме строя (0 — все дроны в одну точку).
 
 const LDP = { LOADED: "loaded_count", TYPE: "loaded_type", OWNER: "bpla:owner", DRONE: "bpla:drone_id" };
 const LAUNCHER_TAG_LOADED = "§aПУ [Заряжена]";
@@ -2195,7 +2244,12 @@ function buildFlightRoute(start, plan, dimId, opts = {}) {
   const [minY, maxY] = dimLimits(dimId);
   const fixY = (y) => clamp(y, minY + 2, maxY - 3);
   const echelon = fixY(Number(plan.echelon) || CONFIG.DEFAULT_ECHELON);
-  const target = resolveTargetPoint(plan.target, dimId, start.y);
+  const off = opts.targetOffset ?? { x: 0, z: 0 };
+  const target = resolveTargetPoint(
+    { ...plan.target, x: plan.target.x + off.x, z: plan.target.z + off.z },
+    dimId,
+    start.y,
+  );
   const wps = (plan.waypoints ?? [])
     .filter(isPoint)
     .map((w) => ({ x: Math.floor(w.x) + 0.5, y: fixY(w.y), z: Math.floor(w.z) + 0.5 }));
@@ -2209,6 +2263,9 @@ function buildFlightRoute(start, plan, dimId, opts = {}) {
     if (cruiseY - start.y > 6 && climbDist < d - 10) route.push(lerpXZ(start, first, climbDist / d, cruiseY));
   }
   route.push(...wps);
+  // Строй: трасса дрона смещается вбок от общей (перпендикулярно местному курсу).
+  // Точка захода строится ниже уже от смещённой трассы к своей точке удара.
+  if (opts.lateral) offsetTrack(route, start, target, opts.lateral);
 
   const lastY = wps.length ? wps[wps.length - 1].y : echelon;
   const last = route.length ? route[route.length - 1] : { x: start.x, y: lastY, z: start.z };
@@ -2218,6 +2275,55 @@ function buildFlightRoute(start, plan, dimId, opts = {}) {
 
   route.push(target);
   return route.map((p) => (p.auto ? { ...roundPoint(p), auto: true } : roundPoint(p)));
+}
+
+/** Сдвигает промежуточные точки вбок на lateral блоков (вправо — плюс) относительно направления трассы в каждой точке. */
+function offsetTrack(points, start, target, lateral) {
+  const shifts = points.map((p, i) => {
+    const prev = i === 0 ? start : points[i - 1];
+    const next = i === points.length - 1 ? target : points[i + 1];
+    const d = horizontalDir(prev, next);
+    return { x: -d.z * lateral, z: d.x * lateral };
+  });
+  points.forEach((p, i) => {
+    p.x += shifts[i].x;
+    p.z += shifts[i].z;
+  });
+}
+
+/** Горизонтальный единичный вектор from → to (по умолчанию — на юг, +Z). */
+function horizontalDir(from, to) {
+  const dx = to.x - from.x,
+    dz = to.z - from.z,
+    l = Math.hypot(dx, dz);
+  return l > 1e-6 ? { x: dx / l, z: dz / l } : { x: 0, z: 1 };
+}
+
+// ---------------------------------------------------------------------------
+// Строй залпа
+// ---------------------------------------------------------------------------
+/** Варианты строя (порядок совпадает с выпадающим списком формы пуска). */
+const FORMATIONS = [
+  { id: "column", name: "Колонна (след в след)" },
+  { id: "line", name: "Шеренга (параллельные курсы)" },
+  { id: "wedge", name: "Клин (ведущий + пары)" },
+];
+
+/**
+ * Слоты строя: lat — смещение вбок (в шагах строя, вправо — плюс), back — назад
+ * вдоль курса, rank — очередь пуска (пуск через rank × интервал).
+ * В клине пары ведомых стартуют одновременно.
+ */
+function formationSlots(kind, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    if (kind === "line") out.push({ lat: i - (n - 1) / 2, back: 0, rank: i });
+    else if (kind === "wedge") {
+      const k = Math.ceil(i / 2);
+      out.push({ lat: i === 0 ? 0 : i % 2 === 1 ? -k : k, back: -k, rank: k });
+    } else out.push({ lat: 0, back: -i, rank: i });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -2288,7 +2394,7 @@ function startFlight(entity, opts) {
  * Пуск с одной ПУ. В полёт уходит дрон на направляющей; если его нет
  * (снят командой и т.п.), он создаётся на направляющей. ПУ становится пустой.
  */
-function fireLauncher(launcherId, owner, plan, group) {
+function fireLauncher(launcherId, owner, plan, group, flight = {}) {
   LAUNCHERS_BUSY.delete(launcherId);
   const launcher = safe(() => world.getEntity(launcherId), undefined);
   if (!launcher || !isValid(launcher)) return null;
@@ -2299,39 +2405,79 @@ function fireLauncher(launcherId, owner, plan, group) {
   if (!drone) return null;
   const pose = placeOnRail(launcher, drone, s.type);
   markLauncherEmpty(launcher);
-  const route = buildFlightRoute(pose.pos, plan, launcher.dimension.id);
+  const route = buildFlightRoute(pose.pos, plan, launcher.dimension.id, flight);
   return startFlight(drone, { route, owner, group, echelon: plan.echelon, fromLauncher: true });
 }
 
 /**
- * Залп: K выбранных ПУ стреляют по очереди через CONFIG.SALVO_INTERVAL тиков.
+ * Залп: K выбранных ПУ стреляют очередью.
  * picks — элементы scanBattery().ready.
+ * opts: { interval (тиков между пусками), formation ("column" | "line" | "wedge"), spread (блоков) }.
  */
-function launchSalvo(player, picks, plan) {
+function launchSalvo(player, picks, plan, opts = {}) {
   if (!picks.length) return 0;
   const owner = player.name;
-  const group = picks.length > 1 ? `З-${nextSequence("bpla:group_seq")}` : "";
+  const n = picks.length;
+  const group = n > 1 ? `З-${nextSequence("bpla:group_seq")}` : "";
   const snapshot = JSON.parse(JSON.stringify(plan));
-  picks.forEach((p, i) => {
-    LAUNCHERS_BUSY.add(p.id);
+  const interval = clamp(Math.round(Number(opts.interval ?? CONFIG.SALVO_INTERVAL)), 0, CONFIG.SALVO_INTERVAL_MAX);
+  const formation = FORMATIONS.some((f) => f.id === opts.formation) ? opts.formation : "column";
+  const spread = clamp(Number(opts.spread) || 0, 0, CONFIG.SPREAD_MAX);
+
+  // Общий курс залпа: от центра батареи к первой точке маршрута. По нему
+  // раскладываются трассы строя. Курс захода на цель задаёт раскладку ударов.
+  const locs = picks.map((p) => safe(() => p.launcher.location, player.location));
+  const origin = { x: locs.reduce((s, l) => s + l.x, 0) / n, y: 0, z: locs.reduce((s, l) => s + l.z, 0) / n };
+  const hdg = horizontalDir(origin, snapshot.waypoints[0] ?? snapshot.target);
+  const right = { x: -hdg.z, z: hdg.x };
+  const appr = horizontalDir(snapshot.waypoints[snapshot.waypoints.length - 1] ?? origin, snapshot.target);
+  const apprRight = { x: -appr.z, z: appr.x };
+
+  const slots = formationSlots(formation, n);
+  const mLat = slots.reduce((s, q) => s + q.lat, 0) / n;
+  const mBack = slots.reduce((s, q) => s + q.back, 0) / n;
+  // ПУ слева по курсу получают левые трассы, а ПУ справа — правые: трассы не пересекаются.
+  // В колонне очередь идёт от ближней к игроку ПУ.
+  let pairs;
+  if (formation === "column") pairs = picks.map((p, i) => ({ pick: p, slot: slots[i] }));
+  else {
+    const side = (i) => (locs[i].x - origin.x) * right.x + (locs[i].z - origin.z) * right.z;
+    const order = picks.map((p, i) => i).sort((a, b) => side(a) - side(b));
+    const bySlot = slots.slice().sort((a, b) => a.lat - b.lat);
+    pairs = order.map((pi, k) => ({ pick: picks[pi], slot: bySlot[k] }));
+  }
+  pairs.sort((a, b) => a.slot.rank - b.slot.rank);
+
+  pairs.forEach(({ pick, slot }, i) => {
+    LAUNCHERS_BUSY.add(pick.id);
+    const flight = {
+      lateral: slot.lat * CONFIG.FORMATION_SPACING,
+      targetOffset: {
+        x: (apprRight.x * (slot.lat - mLat) + appr.x * (slot.back - mBack)) * spread,
+        z: (apprRight.z * (slot.lat - mLat) + appr.z * (slot.back - mBack)) * spread,
+      },
+    };
     const fire = () => {
-      const st = fireLauncher(p.id, owner, snapshot, group);
+      const st = fireLauncher(pick.id, owner, snapshot, group, flight);
       const pl = findPlayerByName(owner);
       if (!st) msg(pl, `§e[БПЛА] ПУ №${i + 1} недоступна (разряжена или уничтожена), пуск пропущен.`);
-      else actionbar(pl, `§aПуск ${i + 1}/${picks.length}: ${st.callsign}`);
+      else actionbar(pl, `§aПуск ${i + 1}/${n}: ${st.callsign}`);
     };
-    if (i === 0) fire();
-    else system.runTimeout(fire, i * CONFIG.SALVO_INTERVAL);
+    const delay = slot.rank * interval;
+    if (delay === 0) fire();
+    else system.runTimeout(fire, delay);
   });
+
   RouteHistory.push(player, snapshot);
   const t = snapshot.target;
+  const fname = FORMATIONS.find((f) => f.id === formation).name;
   msg(
     player,
-    `§a[БПЛА] ${picks.length > 1 ? `Залп ${group}` : "Пуск"}: ${picks.length} дрон(ов), ` +
-      `точек маршрута: ${snapshot.waypoints.length}, цель X: ${Math.floor(t.x)}, Z: ${Math.floor(t.z)}` +
-      (picks.length > 1 ? ` §7(очередь: 1 пуск в ${CONFIG.SALVO_INTERVAL} тиков)` : ""),
+    `§a[БПЛА] ${n > 1 ? `Залп ${group}` : "Пуск"}: ${n} дрон(ов), точек маршрута: ${snapshot.waypoints.length}, ` +
+      `цель X: ${Math.floor(t.x)}, Z: ${Math.floor(t.z)}` +
+      (n > 1 ? ` §7(${fname}, интервал ${interval} тиков, разброс ${spread} бл.)` : ""),
   );
-  return picks.length;
+  return n;
 }
 
 /**
@@ -2639,8 +2785,29 @@ function renderMap(player, view, plan) {
       `${r === MAP_CY ? "§6" : "§7"}${String(r + 1).padStart(2, "0")}` +
       cells.map((cell) => (cell ? cell.color + cell.label : "§8--")).join(""),
   );
-  return { lines: [header, ...rows], offscreen, under };
+  const lines = [header, ...rows];
+  if (CONFIG.MAP_AXES) {
+    // Справа от карты — схема осей координат. Строки без схемы добиваются пробелами
+    // той же ширины (15 пробелов по 4 px = 10 символов по 6 px), чтобы все строки были одной длины.
+    const pad = " ".repeat(15);
+    for (let i = 0; i < lines.length; i++) lines[i] += `§r  ${MAP_AXES_ROWS[i - 1 - (MAP_CY - 2)] ?? pad}`;
+  }
+  return { lines, offscreen, under };
 }
+
+/**
+ * Схема осей координат напротив строк 04–08 карты: вверх — север (-Z),
+ * вниз — юг (+Z), влево — запад (-X), вправо — восток (+X).
+ * Ширина каждой строки — 60 px: символы по 6 px, пустоты — по 3 пробела на 2 символа.
+ */
+const MAP_AXES_GAP = " ".repeat(6);
+const MAP_AXES_ROWS = [
+  `${MAP_AXES_GAP}§e-Z${MAP_AXES_GAP}`,
+  `${MAP_AXES_GAP}§7/\\${MAP_AXES_GAP}`,
+  "§e-X§7==§f++§7==§e+X",
+  `${MAP_AXES_GAP}§7\\/${MAP_AXES_GAP}`,
+  `${MAP_AXES_GAP}§e+Z${MAP_AXES_GAP}`,
+];
 
 const MAP_MODE_TITLES = {
   browse: "обзор",
@@ -2671,7 +2838,8 @@ async function showMap(player, ctx) {
     ...map.lines,
     "",
     "§bOP§7 вы  §aPU§7 ПУ заряжена  §7PU§7 пустая  §eW1§7 точка  §cXX§7 цель  §dDR§7 дрон  §6##§7 курсор",
-  ];
+    CONFIG.MAP_AXES ? "§7Оси справа: §e-Z§7 север (вверх), §e+Z§7 юг, §e-X§7 запад, §e+X§7 восток (вправо)" : null,
+  ].filter((l) => l !== null);
   if (map.offscreen.length) lines.push(`§7За краем карты: ${map.offscreen.join("§7, ")}`);
 
   const here = `\n§8X: ${view.x}, Z: ${view.z}`;
@@ -2997,7 +3165,7 @@ async function showLaunch(player) {
     ...routeChainLines(plan),
     "",
     `§7Готово к пуску: §a${bat.ready.length} ПУ§7 (${counts}). Пустых: ${bat.empty.length}.`,
-    `§7Дроны стартуют со своих ПУ по очереди, 1 пуск в ${CONFIG.SALVO_INTERVAL} тиков.`,
+    "§7Дроны стартуют со своих ПУ по очереди. Интервал, строй и разброс задаются на следующем шаге.",
   ];
   const menu = new MenuBuilder("Пуск с батареи", lines.join("\n"));
   menu.button(`§2§lВсе готовые ПУ (${bat.ready.length})`, "textures/items/rocket_icon", () =>
@@ -3022,16 +3190,45 @@ async function showLaunchCount(player, typeId) {
     return showLaunch(player);
   }
   const plan = RoutePlan.forDimension(player);
+  const prefs = LaunchPrefs.get(player);
+  const fIdx = Math.max(
+    0,
+    FORMATIONS.findIndex((f) => f.id === prefs.formation),
+  );
   const m = new ModalBuilder(`Пуск: готово ${n} ПУ${typeId ? ` (${DRONE_TYPES[typeId].name})` : ""}`);
-  if (n > 1) m.slider("count", "Количество дронов для запуска", 1, n, 1, 1);
+  if (n > 1) {
+    m.slider("count", "Количество дронов для запуска", 1, n, 1, 1)
+      .slider(
+        "interval",
+        "Интервал между пусками, тиков (20 тиков = 1 сек)",
+        0,
+        CONFIG.SALVO_INTERVAL_MAX,
+        2,
+        prefs.interval,
+      )
+      .dropdown(
+        "formation",
+        "Строй в полёте",
+        FORMATIONS.map((f) => f.name),
+        fIdx,
+      )
+      .slider("spread", "Разброс точек удара, блоков (0 = все в одну точку)", 0, CONFIG.SPREAD_MAX, 1, prefs.spread);
+  }
   if (!plan.waypoints.length)
     m.slider("echelon", "Высота эшелона (Y)", CONFIG.ECHELON_MIN, CONFIG.ECHELON_MAX, 5, plan.echelon);
   let k = 1;
+  const salvo = { ...prefs };
   if (m.keys.length) {
     m.submit("Пуск!");
     const r = await m.show(player);
     if (!r) return showLaunch(player);
-    if (n > 1) k = clamp(Math.round(r.count), 1, n);
+    if (n > 1) {
+      k = clamp(Math.round(r.count), 1, n);
+      salvo.interval = r.interval;
+      salvo.formation = (FORMATIONS[r.formation] ?? FORMATIONS[0]).id;
+      salvo.spread = r.spread;
+      LaunchPrefs.set(player, salvo);
+    }
     if (r.echelon !== undefined) {
       plan.echelon = r.echelon;
       RoutePlan.set(player, plan);
@@ -3044,7 +3241,7 @@ async function showLaunchCount(player, typeId) {
     actionbar(player, "§cНет готовых к пуску установок!");
     return;
   }
-  launchSalvo(player, picks, RoutePlan.forDimension(player));
+  launchSalvo(player, picks, RoutePlan.forDimension(player), salvo);
 }
 
 /** Меню ПУ (клик планшетом по ПУ или по дрону на ней). */
@@ -3306,26 +3503,42 @@ async function showArchive(player) {
   const menu = new MenuBuilder(
     "Архив маршрутов",
     list.length
-      ? `§7Выберите маршрут: он станет текущим. Удар неточный: разброс около ${CONFIG.ROUTE_SCATTER} блоков.`
+      ? `§7Уникальные маршруты (${list.length}/${CONFIG.MAX_ROUTE_HISTORY}): повторный пуск по тому же маршруту не создаёт копию, а поднимает его наверх.`
       : "§7Архив пуст. Маршрут попадает в архив при пуске.",
   );
   for (const it of list) {
     const t = it.plan.target;
+    const key = RouteHistory.key(it.plan);
     menu.button(
-      `${it.plan.waypoints.length} точ. | ${fmtTime(it.time)}\n§8цель X: ${Math.floor(t.x)}, Z: ${Math.floor(t.z)}`,
+      `${it.plan.waypoints.length} точ. | ${fmtTime(it.time)}\n§8цель X: ${Math.floor(t.x)}, Z: ${Math.floor(t.z)} · ${dimName(it.plan.dim)}`,
       undefined,
-      () => {
-        const plan = JSON.parse(JSON.stringify(it.plan));
-        plan.dim = player.dimension.id;
-        plan.target.x = Math.floor(plan.target.x + (Math.random() * 2 - 1) * CONFIG.ROUTE_SCATTER);
-        plan.target.z = Math.floor(plan.target.z + (Math.random() * 2 - 1) * CONFIG.ROUTE_SCATTER);
-        RoutePlan.set(player, plan);
-        msg(player, `§6[БПЛА] Маршрут из архива загружен (разброс ~${CONFIG.ROUTE_SCATTER} м).`);
-        return showRouteEditor(player);
-      },
+      () => showArchiveEntry(player, key),
     );
   }
   menu.button("« Назад", undefined, () => showMainMenu(player));
+  await menu.show(player);
+}
+
+async function showArchiveEntry(player, key) {
+  const it = RouteHistory.all(player).find((e) => RouteHistory.key(e.plan) === key);
+  if (!it) return showArchive(player);
+  const same = it.plan.dim === player.dimension.id;
+  const lines = [...routeChainLines(it.plan), "", `§7Последний пуск: ${fmtTime(it.time)}`];
+  if (!same) lines.push(`§6Маршрут из измерения «${dimName(it.plan.dim)}».`);
+  const menu = new MenuBuilder("Маршрут из архива", lines.join("\n"));
+  if (same) {
+    menu.button("§2Сделать текущим маршрутом", "textures/items/remote_icon_waypoint", () => {
+      RoutePlan.set(player, JSON.parse(JSON.stringify(it.plan)));
+      msg(player, "§6[БПЛА] Маршрут из архива загружен.");
+      return showRouteEditor(player);
+    });
+  }
+  menu.button("§cУдалить из архива", undefined, () => {
+    RouteHistory.remove(player, key);
+    msg(player, "§e[БПЛА] Маршрут удалён из архива.");
+    return showArchive(player);
+  });
+  menu.button("« К архиву", undefined, () => showArchive(player));
   await menu.show(player);
 }
 
