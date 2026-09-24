@@ -30,7 +30,70 @@
    "minecraft:knockback_resistance": {
     "value": 1
    },
-   "minecraft:fire_immune": true
+   "minecraft:fire_immune": true,
+   "minecraft:custom_hit_test": {
+    "hitboxes": [
+     {
+      "pivot": [
+       0,
+       0.45,
+       0
+      ],
+      "width": 1.4,
+      "height": 0.9
+     },
+     {
+      "pivot": [
+       0,
+       0.45,
+       1.3
+      ],
+      "width": 1.2,
+      "height": 0.8
+     },
+     {
+      "pivot": [
+       0,
+       0.45,
+       -1.3
+      ],
+      "width": 1.2,
+      "height": 0.8
+     }
+    ]
+   },
+   "minecraft:interact": {
+    "interactions": [
+     {
+      "on_interact": {
+       "filters": {
+        "all_of": [
+         {
+          "test": "is_family",
+          "subject": "other",
+          "value": "player"
+         }
+        ]
+       },
+       "event": "bpla:launcher_interact",
+       "target": "self"
+      },
+      "use_item": false,
+      "interact_text": "Пусковая установка"
+     }
+    ]
+   },
+   "minecraft:nameable": {
+    "always_show": true,
+    "allow_name_tag_renaming": false
+   }
+  },
+  "events": {
+   "bpla:launcher_interact": {
+    "add": {
+     "component_groups": []
+    }
+   }
   }
  }
 }
