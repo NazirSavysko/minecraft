@@ -1,0 +1,34 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "rocket:debris_fp1",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/firepoint1"
+      },
+      "geometry": {
+        "default": "geometry.fp1_debris"
+      },
+      "animations": {
+        "tumble": "animation.fp1_debris.tumble"
+      },
+      "scripts": {
+        "pre_animation": [
+          "variable.dt=math.clamp(query.delta_time,0,0.1);",
+          "variable.w=math.lerp(variable.w??300,query.property('rocket:stuck')?0:300,math.clamp(variable.dt*6,0,1));",
+          "variable.rb=math.lerp(variable.rb??0,query.property('rocket:stuck')?1:0,math.clamp(variable.dt*8,0,1));",
+          "variable.spin=(variable.spin??math.random(0,360))+variable.dt*variable.w;"
+        ],
+        "animate": [
+          "tumble"
+        ]
+      },
+      "render_controllers": [
+        "controller.render.uav_debris"
+      ]
+    }
+  }
+}

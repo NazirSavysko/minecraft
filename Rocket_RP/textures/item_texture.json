@@ -1,0 +1,39 @@
+{
+  "resource_pack_name": "Rocket_RP",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "remote_waypoint": {
+      "textures": "textures/items/remote_icon_waypoint"
+    },
+    "remote_target": {
+      "textures": "textures/items/remote_icon_target"
+    },
+    "rocket_icon": {
+      "textures": "textures/items/rocket_icon"
+    },
+    "rocket_icon2": {
+      "textures": "textures/items/rocket_icon2"
+    },
+    "shahed3_icon": {
+      "textures": "textures/items/shahed3_icon"
+    },
+    "gerbera_icon": {
+      "textures": "textures/items/gerbera_icon"
+    },
+    "uav5_icon": {
+      "textures": "textures/items/uav5_icon"
+    },
+    "molniya1_icon": {
+      "textures": "textures/items/molniya1_icon"
+    },
+    "remote_orange": {
+      "textures": "textures/items/remote_icon_orange"
+    },
+    "launcher_icon": {
+      "textures": "textures/items/launcher_icon"
+    },
+    "fp1_icon": {
+      "textures": "textures/items/fp1_icon"
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "format_version": "1.14.0",
+  "sound_definitions": {
+    "custom.rocket.fly": {
+      "category": "neutral",
+      "min_distance": 30.0,
+      "sounds": [
+        {
+          "name": "sounds/fly",
+          "volume": 1.0,
+          "pitch": 0.8
+        }
+      ]
+    },
+    "custom.rocket.explosion": {
+      "category": "hostile",
+      "min_distance": 60.0,
+      "sounds": [
+        {
+          "name": "sounds/explosion",
+          "volume": 1.0,
+          "pitch": 0.95
+        },
+        {
+          "name": "sounds/explosion_new",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    },
+    "custom.shahed3.fly": {
+      "category": "neutral",
+      "min_distance": 30.0,
+      "sounds": [
+        {
+          "name": "sounds/shahed_fly",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    },
+    "custom.shahed3.explosion": {
+      "category": "hostile",
+      "min_distance": 60.0,
+      "sounds": [
+        {
+          "name": "sounds/shahed3_explosion",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    },
+    "custom.fp1.explosion": {
+      "category": "hostile",
+      "min_distance": 60.0,
+      "sounds": [
+        {
+          "name": "sounds/fp1_explosion",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    },
+    "custom.fp1.fly": {
+      "category": "neutral",
+      "min_distance": 30.0,
+      "sounds": [
+        {
+          "name": "sounds/fp1_fly",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    },
+    "custom.molniya1.fly": {
+      "category": "neutral",
+      "min_distance": 30.0,
+      "sounds": [
+        {
+          "name": "sounds/molniya1_fly",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    },
+    "custom.darts.fly": {
+      "category": "neutral",
+      "min_distance": 30.0,
+      "sounds": [
+        {
+          "name": "sounds/molniya1_fly",
+          "volume": 1.0,
+          "pitch": 1.0
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "format_version": "1.10.0",
+  "animations": {
+    "animation.firepoint1.transform": {
+      "loop": true,
+      "bones": {
+        "bb_main": {
+          "rotation": [
+            "variable.uav_pitch",
+            0,
+            "variable.uav_roll"
+          ]
+        }
+      }
+    },
+    "animation.firepoint1.propeller_spin": {
+      "loop": true,
+      "bones": {
+        "propeller": {
+          "rotation": [
+            "0",
+            "0",
+            "query.anim_time*6480"
+          ]
+        }
+      }
+    }
+  }
+}

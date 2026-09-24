@@ -1,0 +1,51 @@
+{
+  "format_version": "1.10.0",
+  "render_controllers": {
+    "controller.render.uav_debris": {
+      "geometry": "Geometry.default",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.default"
+      ],
+      "part_visibility": [
+        {
+          "*": false
+        },
+        {
+          "p0": "query.property('rocket:piece')==0"
+        },
+        {
+          "p1": "query.property('rocket:piece')==1"
+        },
+        {
+          "p2": "query.property('rocket:piece')==2"
+        },
+        {
+          "p3": "query.property('rocket:piece')==3"
+        },
+        {
+          "p4": "query.property('rocket:piece')==4"
+        },
+        {
+          "p5": "query.property('rocket:piece')==5"
+        }
+      ],
+      "is_hurt_color": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "a": 0
+      },
+      "on_fire_color": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "a": 0
+      }
+    }
+  }
+}

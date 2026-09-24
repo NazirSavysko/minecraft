@@ -1,0 +1,286 @@
+{
+ "format_version": "1.21.0",
+ "minecraft:entity": {
+  "description": {
+   "identifier": "rocket:debris_fp1",
+   "is_spawnable": false,
+   "is_summonable": true,
+   "is_experimental": false,
+   "properties": {
+    "rocket:piece": {
+     "type": "int",
+     "client_sync": true,
+     "range": [
+      0,
+      7
+     ],
+     "default": 0
+    },
+    "rocket:stuck": {
+     "type": "bool",
+     "client_sync": true,
+     "default": false
+    }
+   }
+  },
+  "component_groups": {
+   "rocket:gone": {
+    "minecraft:instant_despawn": {}
+   },
+   "rocket:pc0": {
+    "minecraft:type_family": {
+     "family": [
+      "rocket_debris",
+      "pc0"
+     ]
+    },
+    "minecraft:custom_hit_test": {
+     "hitboxes": [
+      {
+       "width": 1.16,
+       "height": 0.32,
+       "pivot": [
+        0,
+        0.16,
+        0
+       ]
+      }
+     ]
+    }
+   },
+   "rocket:pc1": {
+    "minecraft:type_family": {
+     "family": [
+      "rocket_debris",
+      "pc1"
+     ]
+    },
+    "minecraft:custom_hit_test": {
+     "hitboxes": [
+      {
+       "width": 1.16,
+       "height": 0.32,
+       "pivot": [
+        0,
+        0.16,
+        0
+       ]
+      }
+     ]
+    }
+   },
+   "rocket:pc2": {
+    "minecraft:type_family": {
+     "family": [
+      "rocket_debris",
+      "pc2"
+     ]
+    },
+    "minecraft:custom_hit_test": {
+     "hitboxes": [
+      {
+       "width": 0.57,
+       "height": 0.12,
+       "pivot": [
+        0,
+        0.06,
+        0
+       ]
+      }
+     ]
+    }
+   },
+   "rocket:pc3": {
+    "minecraft:type_family": {
+     "family": [
+      "rocket_debris",
+      "pc3"
+     ]
+    },
+    "minecraft:custom_hit_test": {
+     "hitboxes": [
+      {
+       "width": 1.05,
+       "height": 0.36,
+       "pivot": [
+        0,
+        0.18,
+        0
+       ]
+      }
+     ]
+    }
+   },
+   "rocket:pc4": {
+    "minecraft:type_family": {
+     "family": [
+      "rocket_debris",
+      "pc4"
+     ]
+    },
+    "minecraft:custom_hit_test": {
+     "hitboxes": [
+      {
+       "width": 1.19,
+       "height": 0.12,
+       "pivot": [
+        0,
+        0.06,
+        0
+       ]
+      }
+     ]
+    }
+   },
+   "rocket:pc5": {
+    "minecraft:type_family": {
+     "family": [
+      "rocket_debris",
+      "pc5"
+     ]
+    },
+    "minecraft:custom_hit_test": {
+     "hitboxes": [
+      {
+       "width": 0.7,
+       "height": 0.88,
+       "pivot": [
+        0,
+        0.44,
+        0
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "components": {
+   "minecraft:type_family": {
+    "family": [
+     "rocket_debris"
+    ]
+   },
+   "minecraft:collision_box": {
+    "width": 0.01,
+    "height": 0.01
+   },
+   "minecraft:physics": {
+    "has_gravity": false,
+    "has_collision": false
+   },
+   "minecraft:pushable": {
+    "is_pushable": false,
+    "is_pushable_by_piston": false
+   },
+   "minecraft:health": {
+    "value": 1000,
+    "max": 1000
+   },
+   "minecraft:damage_sensor": {
+    "triggers": [
+     {
+      "cause": "all",
+      "deals_damage": "no"
+     }
+    ]
+   },
+   "minecraft:knockback_resistance": {
+    "value": 1
+   },
+   "minecraft:fire_immune": {},
+   "minecraft:persistent": {},
+   "minecraft:scale": {
+    "value": 1.2
+   },
+   "minecraft:timer": {
+    "time": [
+     295,
+     305
+    ],
+    "looping": false,
+    "time_down_event": {
+     "event": "rocket:despawn"
+    }
+   }
+  },
+  "events": {
+   "rocket:piece_0": {
+    "add": {
+     "component_groups": [
+      "rocket:pc0"
+     ]
+    },
+    "set_property": {
+     "rocket:piece": 0
+    }
+   },
+   "rocket:piece_1": {
+    "add": {
+     "component_groups": [
+      "rocket:pc1"
+     ]
+    },
+    "set_property": {
+     "rocket:piece": 1
+    }
+   },
+   "rocket:piece_2": {
+    "add": {
+     "component_groups": [
+      "rocket:pc2"
+     ]
+    },
+    "set_property": {
+     "rocket:piece": 2
+    }
+   },
+   "rocket:piece_3": {
+    "add": {
+     "component_groups": [
+      "rocket:pc3"
+     ]
+    },
+    "set_property": {
+     "rocket:piece": 3
+    }
+   },
+   "rocket:piece_4": {
+    "add": {
+     "component_groups": [
+      "rocket:pc4"
+     ]
+    },
+    "set_property": {
+     "rocket:piece": 4
+    }
+   },
+   "rocket:piece_5": {
+    "add": {
+     "component_groups": [
+      "rocket:pc5"
+     ]
+    },
+    "set_property": {
+     "rocket:piece": 5
+    }
+   },
+   "rocket:stuck": {
+    "set_property": {
+     "rocket:stuck": true
+    }
+   },
+   "rocket:unstuck": {
+    "set_property": {
+     "rocket:stuck": false
+    }
+   },
+   "rocket:despawn": {
+    "add": {
+     "component_groups": [
+      "rocket:gone"
+     ]
+    }
+   }
+  }
+ }
+}

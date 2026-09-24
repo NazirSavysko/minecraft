@@ -1,0 +1,38 @@
+{
+ "format_version": "1.10.0",
+ "minecraft:client_entity": {
+  "description": {
+   "identifier": "rocket:missile",
+   "materials": {
+    "default": "entity_alphatest"
+   },
+   "textures": {
+    "default": "textures/entity/rocket"
+   },
+   "geometry": {
+    "default": "geometry.rocket"
+   },
+   "scripts": {
+    "animate": [
+     {
+      "transform": "1.0"
+     }
+    ],
+    "pre_animation": [
+     "variable.uav_dt = math.clamp(query.delta_time, 0, 0.1);",
+     "variable.uav_pitch = math.lerp(variable.uav_pitch ?? query.target_x_rotation, query.target_x_rotation, math.clamp(variable.uav_dt * 8, 0, 1));",
+     "variable.uav_roll = math.lerp(variable.uav_roll ?? 0, math.clamp(query.yaw_speed * -0.9, -35, 35), math.clamp(variable.uav_dt * 3, 0, 1));"
+    ]
+   },
+   "animations": {
+    "transform": "animation.rocket.transform"
+   },
+   "render_controllers": [
+    "controller.render.default"
+   ],
+   "sound_effects": {
+    "hurt": ""
+   }
+  }
+ }
+}

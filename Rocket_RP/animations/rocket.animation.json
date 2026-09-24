@@ -1,0 +1,17 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.rocket.transform": {
+      "loop": true,
+      "bones": {
+        "bb_main": {
+          "rotation": [
+            "variable.uav_pitch",
+            0,
+            "variable.uav_roll"
+          ]
+        }
+      }
+    }
+  }
+}

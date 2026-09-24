@@ -1,0 +1,342 @@
+{
+ "format_version": "1.21.0",
+ "minecraft:entity": {
+  "description": {
+   "identifier": "rocket:missile2",
+   "is_spawnable": true,
+   "is_summonable": true,
+   "properties": {
+    "rocket:flying": {
+     "type": "bool",
+     "client_sync": true,
+     "default": false
+    }
+   }
+  },
+  "component_groups": {
+   "rocket:idle": {
+    "minecraft:physics": {
+     "has_gravity": true,
+     "has_collision": true
+    },
+    "minecraft:interact": {
+     "interactions": [
+      {
+       "on_interact": {
+        "filters": {
+         "all_of": [
+          {
+           "test": "is_family",
+           "subject": "other",
+           "value": "player"
+          }
+         ]
+        },
+        "event": "rocket:start_flight",
+        "target": "self"
+       },
+       "use_item": false,
+       "interact_text": "Запустить ракету"
+      }
+     ]
+    }
+   },
+   "rocket:flying": {
+    "minecraft:physics": {
+     "has_gravity": false
+    },
+    "minecraft:tick_world": {
+     "radius": 2,
+     "distance_to_players": 128,
+     "never_despawn": true
+    },
+    "minecraft:timer": {
+     "looping": true,
+     "time": 0.05,
+     "time_down_event": {
+      "event": "rocket:fly_step"
+     }
+    },
+    "minecraft:damage_sensor": {
+     "triggers": [
+      {
+       "cause": "all",
+       "on_damage": {
+        "event": "rocket:explode"
+       },
+       "deals_damage": "no"
+      }
+     ]
+    },
+    "minecraft:pushable": {
+     "is_pushable": false,
+     "is_pushable_by_piston": false
+    }
+   },
+   "rocket:exploding": {
+    "minecraft:explode": {
+     "fuse_length": 0.05,
+     "fuse_lit": true,
+     "power": 8,
+     "causes_fire": true,
+     "breaks_blocks": true
+    }
+   },
+   "rocket:route_ticking": {
+    "minecraft:tick_world": {
+     "radius": 2,
+     "distance_to_players": 128,
+     "never_despawn": true
+    },
+    "minecraft:physics": {
+     "has_gravity": false,
+     "has_collision": false
+    },
+    "minecraft:pushable": {
+     "is_pushable": false,
+     "is_pushable_by_piston": false
+    }
+   },
+   "rocket:mounted": {
+    "minecraft:physics": {
+     "has_gravity": false,
+     "has_collision": false
+    },
+    "minecraft:interact": {
+     "interactions": [
+      {
+       "on_interact": {
+        "filters": {
+         "all_of": [
+          {
+           "test": "is_family",
+           "subject": "other",
+           "value": "player"
+          }
+         ]
+        },
+        "event": "rocket:start_flight",
+        "target": "self"
+       },
+       "use_item": false,
+       "interact_text": "Запустить ракету"
+      }
+     ]
+    },
+    "minecraft:pushable": {
+     "is_pushable": false,
+     "is_pushable_by_piston": false
+    }
+   }
+  },
+  "components": {
+   "minecraft:collision_box": {
+    "width": 0.1,
+    "height": 0.1
+   },
+   "minecraft:pushable": {
+    "is_pushable": false,
+    "is_pushable_by_piston": false
+   },
+   "minecraft:health": {
+    "value": 20,
+    "max": 20
+   },
+   "minecraft:type_family": {
+    "family": [
+     "rocket"
+    ]
+   },
+   "minecraft:custom_hit_test": {
+    "hitboxes": [
+     {
+      "pivot": [
+       0,
+       0.6,
+       0
+      ],
+      "width": 3.0,
+      "height": 1.2
+     }
+    ]
+   },
+   "minecraft:scale": {
+    "value": 1.2
+   },
+   "minecraft:damage_sensor": {
+    "triggers": [
+     {
+      "cause": "all",
+      "deals_damage": "no"
+     }
+    ]
+   }
+  },
+  "events": {
+   "minecraft:entity_spawned": {
+    "sequence": [
+     {
+      "add": {
+       "component_groups": [
+        "rocket:idle"
+       ]
+      }
+     },
+     {
+      "queue_command": {
+       "command": "scoreboard objectives add rocket_snd dummy"
+      }
+     }
+    ]
+   },
+   "rocket:start_flight": {
+    "sequence": [
+     {
+      "remove": {
+       "component_groups": [
+        "rocket:idle",
+        "rocket:mounted"
+       ]
+      }
+     },
+     {
+      "add": {
+       "component_groups": [
+        "rocket:flying"
+       ]
+      }
+     },
+     {
+      "queue_command": {
+       "command": "scoreboard players set @s rocket_snd 0"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute at @s run playsound firework.launch @a ~ ~ ~ 3.0 0.7"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute at @s run playsound custom.rocket.fly @a ~ ~ ~ 10.0 0.8"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute at @s run playsound ambient.weather.thunder @a ~ ~ ~ 0.5 0.35"
+      }
+     }
+    ]
+   },
+   "rocket:fly_step": {
+    "sequence": [
+     {
+      "queue_command": {
+       "command": "execute as @s at @s run tp @s ^ ^ ^0.9 ~ ~"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "scoreboard players add @s rocket_snd 1"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute as @s[scores={rocket_snd=121..}] run stopsound @a custom.rocket.fly"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute as @s[scores={rocket_snd=121..}] at @s run playsound custom.rocket.fly @a ~ ~ ~ 10.0 0.8"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute as @s[scores={rocket_snd=121..}] at @s run playsound ambient.weather.thunder @a ~ ~ ~ 0.5 0.35"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute as @s[scores={rocket_snd=121..}] run scoreboard players set @s rocket_snd 0"
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute at @s unless block ^ ^ ^1.8 air run event entity @s rocket:explode"
+      }
+     }
+    ]
+   },
+   "rocket:explode": {
+    "sequence": [
+     {
+      "queue_command": {
+       "command": "stopsound @a custom.rocket.fly"
+      }
+     },
+     {
+      "remove": {
+       "component_groups": [
+        "rocket:flying"
+       ]
+      }
+     },
+     {
+      "queue_command": {
+       "command": "execute at @s run function shahed3/explode"
+      }
+     },
+     {
+      "add": {
+       "component_groups": [
+        "rocket:exploding"
+       ]
+      }
+     }
+    ]
+   },
+   "rocket:route_start": {
+    "sequence": [
+     {
+      "set_property": {
+       "rocket:flying": true
+      }
+     },
+     {
+      "remove": {
+       "component_groups": [
+        "rocket:idle",
+        "rocket:mounted"
+       ]
+      }
+     },
+     {
+      "add": {
+       "component_groups": [
+        "rocket:route_ticking"
+       ]
+      }
+     }
+    ]
+   },
+   "rocket:mount": {
+    "sequence": [
+     {
+      "remove": {
+       "component_groups": [
+        "rocket:idle"
+       ]
+      }
+     },
+     {
+      "add": {
+       "component_groups": [
+        "rocket:mounted"
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

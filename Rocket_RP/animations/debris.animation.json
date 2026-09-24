@@ -1,0 +1,159 @@
+{
+  "format_version": "1.10.0",
+  "animations": {
+    "animation.fp1_debris.tumble": {
+      "loop": true,
+      "bones": {
+        "p0": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.00,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.60,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.80,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p1": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.13,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.67,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.85,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p2": {
+          "position": [
+            "0",
+            "variable.rb*(-6.2)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.26,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.74,360)+540,360)-180)*(1-variable.rb)",
+            "90+(math.mod(math.mod(variable.spin*0.90,360)-(90)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p3": {
+          "position": [
+            "0",
+            "variable.rb*(-1.8)",
+            "0"
+          ],
+          "rotation": [
+            "90+(math.mod(math.mod(variable.spin*1.39,360)-(90)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.81,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.95,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p4": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.52,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.88,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*1.00,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p5": {
+          "position": [
+            "0",
+            "variable.rb*(-0.3)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.65,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.95,360)+540,360)-180)*(1-variable.rb)",
+            "90+(math.mod(math.mod(variable.spin*1.05,360)-(90)+540,360)-180)*(1-variable.rb)"
+          ]
+        }
+      }
+    },
+    "animation.gerbera_debris.tumble": {
+      "loop": true,
+      "bones": {
+        "p0": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.00,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.60,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.80,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p1": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.13,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.67,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.85,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p2": {
+          "position": [
+            "0",
+            "variable.rb*(-4.0)",
+            "0"
+          ],
+          "rotation": [
+            "90+(math.mod(math.mod(variable.spin*1.26,360)-(90)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.74,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.90,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p3": {
+          "position": [
+            "0",
+            "variable.rb*(-1.5)",
+            "0"
+          ],
+          "rotation": [
+            "90+(math.mod(math.mod(variable.spin*1.39,360)-(90)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.81,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*0.95,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p4": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.52,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.88,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*1.00,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        },
+        "p5": {
+          "position": [
+            "0",
+            "variable.rb*(-0.0)",
+            "0"
+          ],
+          "rotation": [
+            "0+(math.mod(math.mod(variable.spin*1.65,360)-(0)+540,360)-180)*(1-variable.rb)",
+            "(math.mod(math.mod(variable.spin*0.95,360)+540,360)-180)*(1-variable.rb)",
+            "0+(math.mod(math.mod(variable.spin*1.05,360)-(0)+540,360)-180)*(1-variable.rb)"
+          ]
+        }
+      }
+    }
+  }
+}

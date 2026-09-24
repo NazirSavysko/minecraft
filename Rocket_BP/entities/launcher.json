@@ -1,0 +1,36 @@
+{
+ "format_version": "1.21.0",
+ "minecraft:entity": {
+  "description": {
+   "identifier": "bpla:launcher",
+   "is_spawnable": false,
+   "is_summonable": true
+  },
+  "components": {
+   "minecraft:type_family": {
+    "family": [
+     "launcher"
+    ]
+   },
+   "minecraft:health": {
+    "value": 40,
+    "max": 40
+   },
+   "minecraft:collision_box": {
+    "width": 0.05,
+    "height": 0.05
+   },
+   "minecraft:physics": {
+    "has_gravity": false
+   },
+   "minecraft:pushable": {
+    "is_pushable": false,
+    "is_pushable_by_piston": false
+   },
+   "minecraft:knockback_resistance": {
+    "value": 1
+   },
+   "minecraft:fire_immune": true
+  }
+ }
+}

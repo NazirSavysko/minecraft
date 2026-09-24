@@ -1,0 +1,24 @@
+{
+  "format_version": "1.21.10",
+  "minecraft:item": {
+    "description": {
+      "identifier": "rocket:item",
+      "menu_category": {
+        "category": "items",
+        "group": "minecraft:itemGroup.name.misc"
+      }
+    },
+    "components": {
+      "minecraft:icon": "rocket_icon",
+      "minecraft:display_name": {
+        "value": "Shahed"
+      },
+      "minecraft:max_stack_size": 64,
+      "minecraft:hand_equipped": false,
+      "minecraft:entity_placer": {
+        "entity": "rocket:missile"
+      }
+    }
+  }
+}
+
