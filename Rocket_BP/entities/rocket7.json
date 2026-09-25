@@ -32,7 +32,7 @@
           }
          ]
         },
-        "event": "rocket:start_flight",
+        "event": "bpla:interact",
         "target": "self"
        },
        "use_item": false,
@@ -116,7 +116,7 @@
           }
          ]
         },
-        "event": "rocket:start_flight",
+        "event": "bpla:interact",
         "target": "self"
        },
        "use_item": false,
@@ -327,6 +327,11 @@
       }
      }
     ]
+   },
+   "bpla:interact": {
+    "add": {
+     "component_groups": []
+    }
    }
   }
  }

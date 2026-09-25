@@ -39,7 +39,8 @@
  *      (на CONFIG.WAYPOINT_ALT блоков выше блока).
  *   5. «Радар»: карта с центром на игроке, цели в воздухе обновляются раз в
  *      секунду. Можно включить мини-радар на экране (в строке действия).
- *   6. Дым, обломки и пожар после взрыва настраиваются в «Настройки и служебное».
+ *   6. Дым, обломки и огонь после взрыва настраиваются в главном меню планшета:
+ *      «Дым, обломки, огонь» (по умолчанию дым и обломки выключены, огонь 30%).
  *   7. Служебные команды: /scriptevent bpla:areas (статус зон тиков),
  *      /scriptevent bpla:cleanup (удалить зоны дронов, которые больше не летят).
  * ============================================================================
@@ -94,11 +95,11 @@ const CONFIG = {
   AREA_HOUSEKEEPING_INTERVAL: 200, // периодическая уборка «осиротевших» зон
 
   // --- Эффекты взрыва -----------------------------------------------------
-  // Значения по умолчанию; в игре меняются в планшете: «Настройки и служебное» → «Эффекты взрыва».
-  FX_SMOKE_DEFAULT: false, // дым над воронкой (сотни частиц, сильно снижает FPS)
+  // Значения по умолчанию; в игре меняются в планшете: главное меню → «Дым, обломки, огонь».
+  FX_SMOKE_DEFAULT: false, // дым над воронкой и клубы взрыва (сотни частиц, сильно снижает FPS)
   FX_DEBRIS_DEFAULT: false, // обломки FP-1 и Gerbera (сущности со своей физикой, снижают FPS)
-  FX_FIRE_DEFAULT: "reduced", // пожар: "off" — нет, "reduced" — в ~3 раза меньше ванильного, "full" — ванильный
-  FIRE_REDUCED_CHANCE: 1 / 9, // ваниль поджигает ~1/3 подходящих клеток, «уменьшенный» — 1/9
+  FX_FIRE_PERCENT_DEFAULT: 30, // огонь после взрыва, % от ванильного (0 — без огня, 100 — ванильный)
+  FIRE_CHANCE_FULL: 1 / 6, // шанс очага на столбец поверхности при 100% (≈ ванильный взрыв силы 8: ~35 очагов)
 
   // --- Радар --------------------------------------------------------------
   RADAR_REFRESH_TICKS: 20, // обновление экрана радара, тиков (20 = 1 секунда)
@@ -118,6 +119,9 @@ const CONFIG = {
   ONLY_OWNER_CAN_CONTROL: false, // true: коррекция и подрыв только своих дронов
   MAX_SMOKE_COLUMNS: 24, // ограничение одновременно дымящих воронок
 };
+
+/** Версия аддона (показывается в главном меню планшета). */
+const ADDON_VERSION = "1.5.0";
 
 /** Предметы, которые работают как планшет управления. */
 const TABLET_ITEMS = new Set(["bpla:remote_target", "bpla:remote_orange"]);
@@ -672,9 +676,9 @@ const LaunchPrefs = {
 };
 
 /**
- * Эффекты взрыва — общие для всего мира: дым, обломки, пожар.
+ * Эффекты взрыва — общие для всего мира: дым, обломки, огонь (% от ванильного).
  * Хранятся в динамическом свойстве мира. По умолчанию дым и обломки
- * выключены: они сильно снижают FPS.
+ * выключены (они сильно снижают FPS), огонь — 30% от ванильного.
  */
 const FxSettings = {
   KEY: "bpla:fx",
@@ -682,11 +686,15 @@ const FxSettings = {
   get() {
     if (!this.cache) {
       const saved = readJSON(world, this.KEY, {});
+      const s = saved && typeof saved === "object" ? saved : {};
+      // Версия 1.4.0 хранила режим огня строкой: off / reduced / full.
+      let firePct = Number(s.firePct);
+      if (!Number.isFinite(firePct))
+        firePct = s.fire === "off" ? 0 : s.fire === "full" ? 100 : CONFIG.FX_FIRE_PERCENT_DEFAULT;
       this.cache = {
-        smoke: CONFIG.FX_SMOKE_DEFAULT,
-        debris: CONFIG.FX_DEBRIS_DEFAULT,
-        fire: CONFIG.FX_FIRE_DEFAULT,
-        ...(saved && typeof saved === "object" ? saved : {}),
+        smoke: typeof s.smoke === "boolean" ? s.smoke : CONFIG.FX_SMOKE_DEFAULT,
+        debris: typeof s.debris === "boolean" ? s.debris : CONFIG.FX_DEBRIS_DEFAULT,
+        firePct: clamp(Math.round(firePct), 0, 100),
       };
     }
     return this.cache;
@@ -1014,23 +1022,26 @@ function playExplosionFx(dim, typeId, p) {
     runAt(dim, p, "playsound custom.rocket.explosion @a ~ ~ ~ 20.0 0.9 0.2");
     runAt(dim, p, "playsound custom.shahed3.explosion @a ~ ~ ~ 20.0 1.0");
   }
-  SP(dim, "minecraft:huge_explosion_emitter", p);
-  for (const [ox, oy, oz] of [
-    [0, 1.5, 0],
-    [0, 0, 0],
-    [1, 1, 0],
-    [-1, 1, 0],
-    [0, 1, 1],
-    [0, 1, -1],
-    [0, 2, 0],
-  ]) {
-    SP(dim, "minecraft:large_explosion", { x: p.x + ox, y: p.y + oy, z: p.z + oz });
-  }
-  SP(dim, "minecraft:knockback_roar_particle", p);
-  SP(dim, "rocket:explosion_flash", p);
-  // Дым и обломки включаются в настройках (FxSettings): они заметно снижают FPS.
+  // Дым, клубы взрыва и обломки включаются в настройках (FxSettings): они заметно снижают FPS.
+  // Без них остаются ванильные частицы самого взрыва и вспышка.
   const fx = FxSettings.get();
-  if (fx.smoke) startSmoke(dim, p.x, p.y, p.z);
+  if (fx.smoke) {
+    SP(dim, "minecraft:huge_explosion_emitter", p);
+    for (const [ox, oy, oz] of [
+      [0, 1.5, 0],
+      [0, 0, 0],
+      [1, 1, 0],
+      [-1, 1, 0],
+      [0, 1, 1],
+      [0, 1, -1],
+      [0, 2, 0],
+    ]) {
+      SP(dim, "minecraft:large_explosion", { x: p.x + ox, y: p.y + oy, z: p.z + oz });
+    }
+    SP(dim, "minecraft:knockback_roar_particle", p);
+    startSmoke(dim, p.x, p.y, p.z);
+  }
+  SP(dim, "rocket:explosion_flash", p);
   // Обломки: 6 частей, у каждой своё событие появления rocket:piece_N (физика — в §11).
   if (fx.debris && cfg && cfg.debris) {
     for (let i = 0; i < 6; i++) runAt(dim, p, `summon ${cfg.debris} ~ ~0.6 ~ 0 0 rocket:piece_${i}`);
@@ -1039,19 +1050,20 @@ function playExplosionFx(dim, typeId, p) {
 }
 
 /**
- * Пожар после взрыва в режиме «уменьшенный». Ванильный взрыв с causesFire
- * поджигает примерно каждую третью подходящую клетку (воздух над твёрдым
- * блоком). Здесь в каждом столбце круга радиуса взрыва клетка поджигается
- * с шансом CONFIG.FIRE_REDUCED_CHANCE (1/9), то есть огня примерно в 3 раза меньше.
+ * Огонь после взрыва в долях от ванильного. В каждом столбце круга радиуса
+ * взрыва первая клетка «воздух над твёрдым блоком» (дно воронки или
+ * поверхность) поджигается с шансом chance. При 100% это
+ * CONFIG.FIRE_CHANCE_FULL (~35 очагов для силы 8, как у ванили), при 30% —
+ * около 10 очагов.
  */
-function igniteAfterExplosion(dim, p, radius) {
+function igniteAfterExplosion(dim, p, radius, chance) {
   const r = Math.max(1, Math.floor(radius));
   const cx = Math.floor(p.x),
     cy = Math.floor(p.y),
     cz = Math.floor(p.z);
   for (let dx = -r; dx <= r; dx++) {
     for (let dz = -r; dz <= r; dz++) {
-      if (dx * dx + dz * dz > r * r || Math.random() >= CONFIG.FIRE_REDUCED_CHANCE) continue;
+      if (dx * dx + dz * dz > r * r || Math.random() >= chance) continue;
       // Сверху вниз ищем первую клетку «воздух над твёрдым блоком» (дно воронки или поверхность).
       let above = safe(() => dim.getBlock({ x: cx + dx, y: cy + 3, z: cz + dz }), undefined);
       for (let y = cy + 2; above && y >= cy - r; y--) {
@@ -1958,10 +1970,12 @@ function detonate(st, at, reason, victim) {
       setDP(e, DP.LAUNCHED, false);
       e.remove();
     }
-    // Пожар: «full» — ванильный, «reduced» — свой, примерно в 3 раза меньше, «off» — без огня.
-    const fire = FxSettings.get().fire;
-    if (dim) dim.createExplosion(p, st.cfg.power, { breaksBlocks: true, causesFire: fire === "full" });
-    if (dim && fire === "reduced") igniteAfterExplosion(dim, p, st.cfg.power);
+    // Огонь: 100% — ванильный (causesFire), 1–99% — свой поджог в долях от ванильного, 0% — без огня.
+    const firePct = FxSettings.get().firePct;
+    if (dim) dim.createExplosion(p, st.cfg.power, { breaksBlocks: true, causesFire: firePct >= 100 });
+    if (dim && firePct > 0 && firePct < 100) {
+      igniteAfterExplosion(dim, p, st.cfg.power, (firePct / 100) * CONFIG.FIRE_CHANCE_FULL);
+    }
   } catch (err) {
     logError(`detonate(${st.callsign})`, err);
   } finally {
@@ -2795,6 +2809,7 @@ async function showMainMenu(player) {
   const bat = scanBattery(player);
   const plan = RoutePlan.forDimension(player);
   const lines = [
+    `§8Аддон БПЛА v${ADDON_VERSION}`,
     `§7Измерение: §f${dimName(dimId)}§7, позиция: §f${fmtPos(player.location)}`,
     `§7Батарея (до ${CONFIG.BATTERY_RADIUS} бл.): §aготово ${bat.ready.length}§7, пустых ${bat.empty.length}` +
       (bat.busy ? `, в очереди пуска ${bat.busy}` : ""),
@@ -2819,9 +2834,8 @@ async function showMainMenu(player) {
     .button(`§lАрхив маршрутов (${RouteHistory.all(player).length})§r`, "textures/items/remote_icon_orange", () =>
       showArchive(player),
     )
-    .button("§lНастройки и служебное§r\n§8Дым, обломки, огонь, зоны тиков", "textures/items/launcher_icon", () =>
-      showService(player),
-    )
+    .button(`§lДым, обломки, огонь§r\n${fxSummary()}`, undefined, () => showFxSettings(player))
+    .button("§lСлужебное§r\n§8Зоны тиков", "textures/items/launcher_icon", () => showService(player))
     .show(player);
 }
 
@@ -2974,6 +2988,7 @@ async function showMap(player, ctx) {
   const pan = (dx, dz) =>
     reopen({ ...view, x: view.x + dx * CONFIG.MAP_PAN_CELLS * s, z: view.z + dz * CONFIG.MAP_PAN_CELLS * s });
 
+  menu.button("Обновить карту\n§8дроны в воздухе сейчас", undefined, () => showMap(player, ctx));
   menu.button("Выбрать клетку (буква + номер)", undefined, () => showMapCellPicker(player, ctx, view));
   if (view.zoom > 0) {
     menu.button(`Приблизить (+Zoom)\n§81 клетка = ${CONFIG.MAP_ZOOMS[view.zoom - 1]} бл.`, undefined, () =>
@@ -3647,34 +3662,36 @@ async function showArchiveEntry(player, key) {
 // ---------------------------------------------------------------------------
 // Настройки эффектов взрыва
 // ---------------------------------------------------------------------------
-const FIRE_MODES = [
-  { id: "off", name: "Нет" },
-  { id: "reduced", name: "Уменьшенный (в 3 раза меньше)" },
-  { id: "full", name: "Обычный (ванильный)" },
-];
-
-async function showFxSettings(player) {
+/** Краткая строка о текущих эффектах взрыва. */
+function fxSummary() {
   const fx = FxSettings.get();
-  const r = await new ModalBuilder("Эффекты взрыва")
-    .toggle("smoke", "Дым над воронкой (сильно снижает FPS)", fx.smoke)
-    .toggle("debris", "Обломки FP-1 и Gerbera (снижают FPS)", fx.debris)
-    .dropdown(
-      "fire",
-      "Пожар после взрыва",
-      FIRE_MODES.map((m) => m.name),
-      Math.max(
-        0,
-        FIRE_MODES.findIndex((m) => m.id === fx.fire),
-      ),
+  const on = (v) => (v ? "§aвкл" : "§cвыкл");
+  const fire = fx.firePct === 0 ? "§cнет" : fx.firePct >= 100 ? "§fобычный" : `§f${fx.firePct}%`;
+  return `§7Дым ${on(fx.smoke)}§7, обломки ${on(fx.debris)}§7, огонь ${fire}`;
+}
+
+/** Настройки эффектов взрыва (для всего мира). back — куда вернуться после сохранения. */
+async function showFxSettings(player, back = showMainMenu) {
+  const fx = FxSettings.get();
+  const r = await new ModalBuilder("Дым, обломки, огонь")
+    .toggle("smoke", "Дым и клубы взрыва (сильно снижает FPS)", fx.smoke)
+    .toggle("debris", "Обломки дронов FP-1 и Gerbera (снижают FPS)", fx.debris)
+    .slider(
+      "firePct",
+      "Огонь после взрыва, % от обычного (0 = без огня, 30 = в 3 раза меньше, 100 = ванильный)",
+      0,
+      100,
+      5,
+      fx.firePct,
     )
     .submit("Сохранить")
     .show(player);
   if (r) {
-    FxSettings.set({ smoke: !!r.smoke, debris: !!r.debris, fire: (FIRE_MODES[r.fire] ?? FIRE_MODES[1]).id });
+    FxSettings.set({ smoke: !!r.smoke, debris: !!r.debris, firePct: clamp(Math.round(r.firePct), 0, 100) });
     if (!r.smoke) SMOKE.length = 0; // уже дымящие воронки гаснут сразу
-    msg(player, "§e[БПЛА] Настройки эффектов взрыва сохранены (для всего мира).");
+    msg(player, `§e[БПЛА] Эффекты взрыва сохранены для всего мира: ${fxSummary()}`);
   }
-  return showService(player);
+  return back(player);
 }
 
 // ---------------------------------------------------------------------------
@@ -3764,7 +3781,7 @@ async function showRadar(player) {
     const own = targets.filter((t) => t.own).length;
     const pl = player.location;
     const body = [
-      `§aРАДАР§7 | центр — вы (X: ${Math.floor(pl.x)}, Z: ${Math.floor(pl.z)}) | обновление каждые ${CONFIG.RADAR_REFRESH_TICKS / 20} с`,
+      `§aРАДАР§7 | центр — вы (X: ${Math.floor(pl.x)}, Z: ${Math.floor(pl.z)}) | автообновление каждые ${CONFIG.RADAR_REFRESH_TICKS / 20} с`,
       `§7Масштаб: §f1 клетка = ${radar.scale} бл.§7, кольцо — §f${radar.ring} бл.§7, север сверху`,
       "",
       ...lines,
@@ -3773,10 +3790,15 @@ async function showRadar(player) {
       `§fЦели в воздухе: ${targets.length}§7 (своих ${own}, чужих ${targets.length - own})` +
         (radar.outside ? `, за краем экрана: ${radar.outside}` : ""),
       ...targets.slice(0, CONFIG.RADAR_LIST_MAX).map((t) => radarTargetLine(player, t)),
+      "",
+      "§8Если экран не обновляется сам, нажмите «Обновить радар» или включите мини-радар на экране: он обновляется постоянно.",
     ].join("\n");
 
     const form = new ActionFormData().title("Радар").body(body);
     const actions = [];
+    // Кнопка «Обновить» — сразу под картой: работает, даже если автообновление не сработало.
+    form.button("§2§lОбновить радар§r\n§8цели в воздухе сейчас");
+    actions.push("refresh");
     if (prefs.zoom > 0) {
       form.button(`Приблизить (+Zoom)\n§81 клетка = ${CONFIG.MAP_ZOOMS[prefs.zoom - 1]} бл.`);
       actions.push("in");
@@ -3808,7 +3830,11 @@ async function showRadar(player) {
       system.clearRun(timer);
     }
     if (res.canceled) {
-      if (auto) continue;
+      if (auto) {
+        // Даём клиенту закрыть старое окно, иначе новое может закрыться вместе с ним.
+        await system.waitTicks(2);
+        continue;
+      }
       if (res.cancelationReason === FormCancelationReason.UserBusy && ++busy < 20) {
         await system.waitTicks(5);
         continue;
@@ -3818,6 +3844,7 @@ async function showRadar(player) {
     busy = 0;
     const act = actions[res.selection];
     if (act === "back") return showMainMenu(player);
+    if (act === "refresh") continue;
     if (act === "in") prefs.zoom = Math.max(0, prefs.zoom - 1);
     else if (act === "out") prefs.zoom = Math.min(CONFIG.MAP_ZOOMS.length - 1, prefs.zoom + 1);
     else if (act === "hud") {
@@ -3847,14 +3874,9 @@ async function showService(player) {
     const who = st && st.launched && !st.dead ? `§a${st.callsign}` : "§cбез дрона";
     lines.push(`§8${r.name} @ ${r.x} ${r.y} ${r.z} (${dimName(r.dim)}) - ${who}`);
   }
-  const fx = FxSettings.get();
-  const fireName = { off: "нет", reduced: "уменьшенный", full: "обычный" }[fx.fire] ?? fx.fire;
-  lines.unshift(
-    `§7Эффекты взрыва: дым ${fx.smoke ? "§aвкл" : "§cвыкл"}§7, обломки ${fx.debris ? "§aвкл" : "§cвыкл"}§7, огонь §f${fireName}`,
-    "",
-  );
-  await new MenuBuilder("Настройки и служебное", lines.join("\n"))
-    .button("§lЭффекты взрыва§r\n§8Дым, обломки, огонь (FPS)", undefined, () => showFxSettings(player))
+  lines.unshift(`§7Эффекты взрыва: ${fxSummary()}`, "");
+  await new MenuBuilder("Служебное", lines.join("\n"))
+    .button("§lДым, обломки, огонь§r\n§8Эффекты взрыва (FPS)", undefined, () => showFxSettings(player, showService))
     .button("Убрать зоны без дронов", undefined, () => {
       msg(player, `§e[БПЛА] Удалено зон без дронов: ${areaHousekeeping()}.`);
       return showService(player);
