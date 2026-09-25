@@ -37,13 +37,16 @@
  *      (0 — все в одну точку). Дроны стартуют со своих ПУ по очереди.
  *   4. «Пульт маршрута»: ПКМ по блоку добавляет путевую точку
  *      (на CONFIG.WAYPOINT_ALT блоков выше блока).
- *   5. Служебные команды: /scriptevent bpla:areas (статус зон тиков),
+ *   5. «Радар»: карта с центром на игроке, цели в воздухе обновляются раз в
+ *      секунду. Можно включить мини-радар на экране (в строке действия).
+ *   6. Дым, обломки и пожар после взрыва настраиваются в «Настройки и служебное».
+ *   7. Служебные команды: /scriptevent bpla:areas (статус зон тиков),
  *      /scriptevent bpla:cleanup (удалить зоны дронов, которые больше не летят).
  * ============================================================================
  */
 
 import { world, system, GameMode, ItemStack } from "@minecraft/server";
-import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
+import { ActionFormData, ModalFormData, FormCancelationReason, uiManager } from "@minecraft/server-ui";
 
 // ============================================================================
 // §0  КОНФИГУРАЦИЯ
@@ -89,6 +92,18 @@ const CONFIG = {
   AREA_RETRY_INTERVAL: 100, // повтор попытки создать зону при исчерпании лимита
   MAX_DRONE_AREAS: 9, // лимит мира — 10 зон; одну оставляем игрокам/другим аддонам
   AREA_HOUSEKEEPING_INTERVAL: 200, // периодическая уборка «осиротевших» зон
+
+  // --- Эффекты взрыва -----------------------------------------------------
+  // Значения по умолчанию; в игре меняются в планшете: «Настройки и служебное» → «Эффекты взрыва».
+  FX_SMOKE_DEFAULT: false, // дым над воронкой (сотни частиц, сильно снижает FPS)
+  FX_DEBRIS_DEFAULT: false, // обломки FP-1 и Gerbera (сущности со своей физикой, снижают FPS)
+  FX_FIRE_DEFAULT: "reduced", // пожар: "off" — нет, "reduced" — в ~3 раза меньше ванильного, "full" — ванильный
+  FIRE_REDUCED_CHANCE: 1 / 9, // ваниль поджигает ~1/3 подходящих клеток, «уменьшенный» — 1/9
+
+  // --- Радар --------------------------------------------------------------
+  RADAR_REFRESH_TICKS: 20, // обновление экрана радара, тиков (20 = 1 секунда)
+  RADAR_DEFAULT_ZOOM: 3, // индекс масштаба радара по умолчанию (50 блоков в клетке)
+  RADAR_LIST_MAX: 8, // сколько ближайших целей перечислять под картой радара
 
   // --- Тактическая карта --------------------------------------------------
   MAP_ZOOMS: [5, 10, 25, 50, 100, 200], // масштабы: блоков в одной клетке
@@ -350,6 +365,7 @@ const DRONE_TYPES = {
     mount: { z: 0.5, y: 0.6, p: 15 },
     power: 8,
     debris: null,
+    missile: true, // на радаре — ракета (R), остальные типы — дроны (D)
   },
   "rocket:missile3": {
     name: "Shahed-136",
@@ -649,6 +665,48 @@ const LaunchPrefs = {
     const d = { interval: CONFIG.SALVO_INTERVAL, formation: "column", spread: 0 };
     const saved = readJSON(player, this.KEY, {});
     return Object.assign(d, saved && typeof saved === "object" ? saved : {});
+  },
+  set(player, prefs) {
+    writeJSON(player, this.KEY, prefs);
+  },
+};
+
+/**
+ * Эффекты взрыва — общие для всего мира: дым, обломки, пожар.
+ * Хранятся в динамическом свойстве мира. По умолчанию дым и обломки
+ * выключены: они сильно снижают FPS.
+ */
+const FxSettings = {
+  KEY: "bpla:fx",
+  cache: null,
+  get() {
+    if (!this.cache) {
+      const saved = readJSON(world, this.KEY, {});
+      this.cache = {
+        smoke: CONFIG.FX_SMOKE_DEFAULT,
+        debris: CONFIG.FX_DEBRIS_DEFAULT,
+        fire: CONFIG.FX_FIRE_DEFAULT,
+        ...(saved && typeof saved === "object" ? saved : {}),
+      };
+    }
+    return this.cache;
+  },
+  set(patch) {
+    this.cache = { ...this.get(), ...patch };
+    writeJSON(world, this.KEY, this.cache);
+  },
+};
+
+/** Настройки радара игрока: масштаб и мини-радар на экране. */
+const RadarPrefs = {
+  KEY: "bpla:radar",
+  get(player) {
+    const out = { zoom: CONFIG.RADAR_DEFAULT_ZOOM, hud: false };
+    const saved = readJSON(player, this.KEY, {});
+    if (saved && typeof saved === "object") Object.assign(out, saved);
+    out.zoom = clamp(out.zoom | 0, 0, CONFIG.MAP_ZOOMS.length - 1);
+    out.hud = !!out.hud;
+    return out;
   },
   set(player, prefs) {
     writeJSON(player, this.KEY, prefs);
@@ -970,12 +1028,45 @@ function playExplosionFx(dim, typeId, p) {
   }
   SP(dim, "minecraft:knockback_roar_particle", p);
   SP(dim, "rocket:explosion_flash", p);
-  startSmoke(dim, p.x, p.y, p.z);
+  // Дым и обломки включаются в настройках (FxSettings): они заметно снижают FPS.
+  const fx = FxSettings.get();
+  if (fx.smoke) startSmoke(dim, p.x, p.y, p.z);
   // Обломки: 6 частей, у каждой своё событие появления rocket:piece_N (физика — в §11).
-  if (cfg && cfg.debris) {
+  if (fx.debris && cfg && cfg.debris) {
     for (let i = 0; i < 6; i++) runAt(dim, p, `summon ${cfg.debris} ~ ~0.6 ~ 0 0 rocket:piece_${i}`);
   }
   flashPlayers(dim, p);
+}
+
+/**
+ * Пожар после взрыва в режиме «уменьшенный». Ванильный взрыв с causesFire
+ * поджигает примерно каждую третью подходящую клетку (воздух над твёрдым
+ * блоком). Здесь в каждом столбце круга радиуса взрыва клетка поджигается
+ * с шансом CONFIG.FIRE_REDUCED_CHANCE (1/9), то есть огня примерно в 3 раза меньше.
+ */
+function igniteAfterExplosion(dim, p, radius) {
+  const r = Math.max(1, Math.floor(radius));
+  const cx = Math.floor(p.x),
+    cy = Math.floor(p.y),
+    cz = Math.floor(p.z);
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      if (dx * dx + dz * dz > r * r || Math.random() >= CONFIG.FIRE_REDUCED_CHANCE) continue;
+      // Сверху вниз ищем первую клетку «воздух над твёрдым блоком» (дно воронки или поверхность).
+      let above = safe(() => dim.getBlock({ x: cx + dx, y: cy + 3, z: cz + dz }), undefined);
+      for (let y = cy + 2; above && y >= cy - r; y--) {
+        const b = safe(() => dim.getBlock({ x: cx + dx, y, z: cz + dz }), undefined);
+        if (!b) break;
+        if (above.isAir && !b.isAir && !b.isLiquid) {
+          try {
+            above.setType("minecraft:fire");
+          } catch {}
+          break;
+        }
+        above = b;
+      }
+    }
+  }
 }
 
 /**
@@ -1442,6 +1533,7 @@ function registerDrone(entity) {
     snd: 0,
     engNear: null,
     lastDir: null,
+    lastSpeed: 0,
     areaRetryAt: 0,
     areaWarned: false,
     phase: hashString(entity.id),
@@ -1766,6 +1858,7 @@ function flightTick(st, now) {
     e.teleport(next, { rotation: { x: st.pitch, y: st.yaw } });
     st.pos = next;
     st.lastDir = vnorm(step);
+    st.lastSpeed = vlen(step);
   } catch {
     // Точка не загружена: дрон ждёт, пока зона тиков подгрузит чанки.
   }
@@ -1787,7 +1880,7 @@ function fallingTick(st) {
   const tail = { x: p.x + Math.sin(rad) * 1.3, y: p.y + 0.3, z: p.z - Math.cos(rad) * 1.3 };
   SP(dim, "minecraft:basic_flame_particle", tail);
   SP(dim, "minecraft:basic_flame_particle", tail);
-  SP(dim, "minecraft:campfire_smoke_particle", { x: tail.x, y: tail.y + 0.2, z: tail.z });
+  if (FxSettings.get().smoke) SP(dim, "minecraft:campfire_smoke_particle", { x: tail.x, y: tail.y + 0.2, z: tail.z });
 
   const next = { x: p.x - Math.sin(rad) * 0.25, y: p.y - 0.55, z: p.z + Math.cos(rad) * 0.25 };
   st.hitPitch = lerp(st.hitPitch ?? st.pitch, 80, 0.12);
@@ -1796,6 +1889,7 @@ function fallingTick(st) {
     e.teleport(next, { rotation: { x: st.pitch, y: st.yaw } });
     st.pos = next;
     st.lastDir = { x: 0, y: -1, z: 0 };
+    st.lastSpeed = 0.6;
   } catch {}
   safe(() => e.clearVelocity());
   engineTick(st, false);
@@ -1864,7 +1958,10 @@ function detonate(st, at, reason, victim) {
       setDP(e, DP.LAUNCHED, false);
       e.remove();
     }
-    if (dim) dim.createExplosion(p, st.cfg.power, { breaksBlocks: true, causesFire: true });
+    // Пожар: «full» — ванильный, «reduced» — свой, примерно в 3 раза меньше, «off» — без огня.
+    const fire = FxSettings.get().fire;
+    if (dim) dim.createExplosion(p, st.cfg.power, { breaksBlocks: true, causesFire: fire === "full" });
+    if (dim && fire === "reduced") igniteAfterExplosion(dim, p, st.cfg.power);
   } catch (err) {
     logError(`detonate(${st.callsign})`, err);
   } finally {
@@ -2715,11 +2812,16 @@ async function showMainMenu(player) {
     .button(`§lАктивные дроны (${flying.length})§r\n§8Коррекция цели в полёте`, "textures/items/shahed3_icon", () =>
       showActiveDrones(player),
     )
+    .button("§lРадар§r\n§8Цели в воздухе в реальном времени", "textures/items/remote_icon_orange", () =>
+      showRadar(player),
+    )
     .button(`§lШаблоны целей (${Presets.all().length})§r`, undefined, () => showPresets(player))
     .button(`§lАрхив маршрутов (${RouteHistory.all(player).length})§r`, "textures/items/remote_icon_orange", () =>
       showArchive(player),
     )
-    .button("§lСлужебное§r\n§8Зоны тиков", "textures/items/launcher_icon", () => showService(player))
+    .button("§lНастройки и служебное§r\n§8Дым, обломки, огонь, зоны тиков", "textures/items/launcher_icon", () =>
+      showService(player),
+    )
     .show(player);
 }
 
@@ -3543,6 +3645,193 @@ async function showArchiveEntry(player, key) {
 }
 
 // ---------------------------------------------------------------------------
+// Настройки эффектов взрыва
+// ---------------------------------------------------------------------------
+const FIRE_MODES = [
+  { id: "off", name: "Нет" },
+  { id: "reduced", name: "Уменьшенный (в 3 раза меньше)" },
+  { id: "full", name: "Обычный (ванильный)" },
+];
+
+async function showFxSettings(player) {
+  const fx = FxSettings.get();
+  const r = await new ModalBuilder("Эффекты взрыва")
+    .toggle("smoke", "Дым над воронкой (сильно снижает FPS)", fx.smoke)
+    .toggle("debris", "Обломки FP-1 и Gerbera (снижают FPS)", fx.debris)
+    .dropdown(
+      "fire",
+      "Пожар после взрыва",
+      FIRE_MODES.map((m) => m.name),
+      Math.max(
+        0,
+        FIRE_MODES.findIndex((m) => m.id === fx.fire),
+      ),
+    )
+    .submit("Сохранить")
+    .show(player);
+  if (r) {
+    FxSettings.set({ smoke: !!r.smoke, debris: !!r.debris, fire: (FIRE_MODES[r.fire] ?? FIRE_MODES[1]).id });
+    if (!r.smoke) SMOKE.length = 0; // уже дымящие воронки гаснут сразу
+    msg(player, "§e[БПЛА] Настройки эффектов взрыва сохранены (для всего мира).");
+  }
+  return showService(player);
+}
+
+// ---------------------------------------------------------------------------
+// Радар
+// ---------------------------------------------------------------------------
+// Карта с центром на игроке. На ней цели в воздухе: дроны (D) и ракеты (R),
+// свои — зелёные, чужие — красные. Кольцо показывает дальность по краю экрана.
+// Экран обновляется каждые CONFIG.RADAR_REFRESH_TICKS тиков: форма закрывается
+// (uiManager.closeAllForms) и открывается снова с новыми позициями, поэтому
+// метки целей движутся как на настоящем радаре.
+// Мини-радар на экране рисуется в строке действия (§10, hudTick).
+
+/** Цели в воздухе в измерении игрока, ближайшие первыми; подписи D1.., R1... */
+function radarTargets(player) {
+  const dimId = player.dimension.id,
+    pl = player.location;
+  const list = flyingDrones()
+    .filter((st) => st.dimId === dimId)
+    .map((st) => ({ st, dist: hdist(st.pos, pl), own: st.owner === player.name }))
+    .sort((a, b) => a.dist - b.dist);
+  list.forEach((t, i) => {
+    t.label = `${t.st.cfg.missile ? "R" : "D"}${i < 9 ? i + 1 : "+"}`;
+    t.color = t.own ? "§a" : "§c";
+  });
+  return list;
+}
+
+/**
+ * Сетка радара cols×rows (клетка — 2 символа по 6 px), центр — игрок.
+ * Возвращает строки и число целей за краем экрана.
+ */
+function renderRadar(player, zoom, cols, rows, targets) {
+  const s = CONFIG.MAP_ZOOMS[zoom],
+    cx = Math.floor(cols / 2),
+    cy = Math.floor(rows / 2),
+    ring = Math.min(cx, cy);
+  const pl = player.location;
+  const grid = [];
+  for (let r = 0; r < rows; r++) grid.push(new Array(cols).fill(null));
+  let outside = 0;
+  for (const t of targets) {
+    const col = Math.round((t.st.pos.x - pl.x) / s) + cx,
+      row = Math.round((t.st.pos.z - pl.z) / s) + cy;
+    if (col < 0 || col >= cols || row < 0 || row >= rows) {
+      outside++;
+      continue;
+    }
+    if (!grid[row][col]) grid[row][col] = t; // ближняя цель важнее
+  }
+  const lines = grid.map((cells, r) =>
+    cells
+      .map((t, c) => {
+        if (t) return t.color + t.label;
+        if (r === cy && c === cx) return "§bOP";
+        return Math.abs(Math.hypot(c - cx, r - cy) - ring) < 0.5 ? "§2++" : "§2--";
+      })
+      .join(""),
+  );
+  return { lines, outside, scale: s, ring: ring * s };
+}
+
+/** Строка о цели: подпись, кто, дальность и направление, высота, скорость, курс. */
+function radarTargetLine(player, t) {
+  const st = t.st,
+    pl = player.location;
+  const who = t.own ? st.callsign : `${st.cfg.name} (чужой)`;
+  const dy = Math.round(st.pos.y - pl.y);
+  const course = st.lastDir && Math.hypot(st.lastDir.x, st.lastDir.z) > 0.2 ? compass({ x: 0, z: 0 }, st.lastDir) : "-";
+  const speed = (st.lastSpeed ?? 0) * 20;
+  return (
+    `${t.color}${t.label}§7 ${who} · ${Math.round(t.dist)} бл. ${compass(pl, st.pos)} · ` +
+    `Y ${Math.round(st.pos.y)} (${dy >= 0 ? "+" : ""}${dy}) · ${speed.toFixed(0)} бл/с · курс ${course}` +
+    (st.hit ? " §c[сбит]" : "")
+  );
+}
+
+/** Экран радара с автообновлением. */
+async function showRadar(player) {
+  let busy = 0;
+  while (isValid(player)) {
+    const prefs = RadarPrefs.get(player);
+    const targets = radarTargets(player);
+    const radar = renderRadar(player, prefs.zoom, MAP_COLS, MAP_ROWS, targets);
+    const lines = radar.lines.map((l, i) =>
+      CONFIG.MAP_AXES ? `${l}§r  ${MAP_AXES_ROWS[i - (MAP_CY - 2)] ?? " ".repeat(15)}` : l,
+    );
+    const own = targets.filter((t) => t.own).length;
+    const pl = player.location;
+    const body = [
+      `§aРАДАР§7 | центр — вы (X: ${Math.floor(pl.x)}, Z: ${Math.floor(pl.z)}) | обновление каждые ${CONFIG.RADAR_REFRESH_TICKS / 20} с`,
+      `§7Масштаб: §f1 клетка = ${radar.scale} бл.§7, кольцо — §f${radar.ring} бл.§7, север сверху`,
+      "",
+      ...lines,
+      "",
+      "§bOP§7 вы  §aD1§7 свой дрон  §cD1§7 чужой дрон  §aR§7/§cR§7 ракета  §2++§7 кольцо",
+      `§fЦели в воздухе: ${targets.length}§7 (своих ${own}, чужих ${targets.length - own})` +
+        (radar.outside ? `, за краем экрана: ${radar.outside}` : ""),
+      ...targets.slice(0, CONFIG.RADAR_LIST_MAX).map((t) => radarTargetLine(player, t)),
+    ].join("\n");
+
+    const form = new ActionFormData().title("Радар").body(body);
+    const actions = [];
+    if (prefs.zoom > 0) {
+      form.button(`Приблизить (+Zoom)\n§81 клетка = ${CONFIG.MAP_ZOOMS[prefs.zoom - 1]} бл.`);
+      actions.push("in");
+    }
+    if (prefs.zoom < CONFIG.MAP_ZOOMS.length - 1) {
+      form.button(`Отдалить (-Zoom)\n§81 клетка = ${CONFIG.MAP_ZOOMS[prefs.zoom + 1]} бл.`);
+      actions.push("out");
+    }
+    form.button(`Мини-радар на экране: ${prefs.hud ? "§aВКЛ" : "§cВЫКЛ"}\n§8в строке действия, пока планшет в руке`);
+    actions.push("hud");
+    form.button("« Назад");
+    actions.push("back");
+
+    // Автообновление: через заданное время закрываем форму и рисуем её заново.
+    let auto = false;
+    const timer = system.runTimeout(() => {
+      auto = true;
+      try {
+        uiManager.closeAllForms(player);
+      } catch {}
+    }, CONFIG.RADAR_REFRESH_TICKS);
+    let res;
+    try {
+      res = await form.show(player);
+    } catch (err) {
+      logError("radar", err);
+      return;
+    } finally {
+      system.clearRun(timer);
+    }
+    if (res.canceled) {
+      if (auto) continue;
+      if (res.cancelationReason === FormCancelationReason.UserBusy && ++busy < 20) {
+        await system.waitTicks(5);
+        continue;
+      }
+      return; // игрок закрыл радар
+    }
+    busy = 0;
+    const act = actions[res.selection];
+    if (act === "back") return showMainMenu(player);
+    if (act === "in") prefs.zoom = Math.max(0, prefs.zoom - 1);
+    else if (act === "out") prefs.zoom = Math.min(CONFIG.MAP_ZOOMS.length - 1, prefs.zoom + 1);
+    else if (act === "hud") {
+      prefs.hud = !prefs.hud;
+      msg(
+        player,
+        prefs.hud ? "§a[БПЛА] Мини-радар на экране включён: держите планшет в руке." : "§e[БПЛА] Мини-радар выключен.",
+      );
+    }
+    RadarPrefs.set(player, prefs);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Служебное: зоны тиков
 // ---------------------------------------------------------------------------
 async function showService(player) {
@@ -3558,7 +3847,14 @@ async function showService(player) {
     const who = st && st.launched && !st.dead ? `§a${st.callsign}` : "§cбез дрона";
     lines.push(`§8${r.name} @ ${r.x} ${r.y} ${r.z} (${dimName(r.dim)}) - ${who}`);
   }
-  await new MenuBuilder("Служебное", lines.join("\n"))
+  const fx = FxSettings.get();
+  const fireName = { off: "нет", reduced: "уменьшенный", full: "обычный" }[fx.fire] ?? fx.fire;
+  lines.unshift(
+    `§7Эффекты взрыва: дым ${fx.smoke ? "§aвкл" : "§cвыкл"}§7, обломки ${fx.debris ? "§aвкл" : "§cвыкл"}§7, огонь §f${fireName}`,
+    "",
+  );
+  await new MenuBuilder("Настройки и служебное", lines.join("\n"))
+    .button("§lЭффекты взрыва§r\n§8Дым, обломки, огонь (FPS)", undefined, () => showFxSettings(player))
     .button("Убрать зоны без дронов", undefined, () => {
       msg(player, `§e[БПЛА] Удалено зон без дронов: ${areaHousekeeping()}.`);
       return showService(player);
@@ -3840,10 +4136,28 @@ world.afterEvents.playerLeave.subscribe((ev) => {
   ENG_NEAR.delete(ev.playerId);
 });
 
-/** Строка состояния (actionbar) у игрока с планшетом в руке: дроны в воздухе, готовые ПУ, цель. */
+/**
+ * Строка состояния (actionbar) у игрока с планшетом в руке: дроны в воздухе,
+ * готовые ПУ, цель. Если включён мини-радар, в строке рисуется малая сетка радара.
+ */
 function hudTick() {
   for (const pl of world.getAllPlayers()) {
     if (!isValid(pl) || !TABLET_ITEMS.has(heldItemId(pl))) continue;
+    const radar = RadarPrefs.get(pl);
+    if (radar.hud) {
+      const targets = radarTargets(pl);
+      const view = renderRadar(pl, radar.zoom, 11, 7, targets);
+      const near = targets[0];
+      const status =
+        `§aРадар§7 1 кл = ${view.scale} бл · целей: §f${targets.length}` +
+        (near
+          ? `§7 · ближ. ${near.color}${near.label}§7 ${Math.round(near.dist)} бл ${compass(pl.location, near.st.pos)}`
+          : "");
+      try {
+        pl.onScreenDisplay.setActionBar([...view.lines, status].join("\n"));
+      } catch {}
+      continue;
+    }
     const own = flyingDrones().filter((st) => st.owner === pl.name);
     let text = `§6БПЛА§r в воздухе: §e${own.length}§r | ПУ готово: §a${scanBattery(pl).ready.length}`;
     let best = null,
